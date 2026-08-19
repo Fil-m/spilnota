@@ -42,17 +42,30 @@
   <a href="#/people" data-nav="people">👥<br><small>Люди</small></a>
 </div>
 
-<!-- Модалка реєстрації -->
+<!-- Модалка входу (особистий GitHub-токен) -->
 <div class="modal-mask hidden" id="reg-mask">
   <div class="modal">
-    <div class="modal-title">Ласкаво просимо до Спільноти!</div>
-    <div class="modal-sub">Оберіть собі ім'я та аватар</div>
-    <input class="input" id="reg-name" maxlength="24" placeholder="Ваше ім'я або нік" onkeydown="if(event.key==='Enter')tryRegister()">
-    <div class="emoji-grid" id="reg-emojis"></div>
-    <div class="btn-row">
-      <button class="btn" id="reg-btn" onclick="tryRegister()">Увійти</button>
+    <div class="modal-title" id="reg-title">Вхід у Спільноту</div>
+    <div class="modal-sub" id="reg-sub"></div>
+
+    <!-- Крок 1: токен -->
+    <div id="reg-step1">
+      <input class="input" id="token-input" placeholder="Вставте GitHub-токен (ghp_... або github_pat_...)" autocomplete="off" onkeydown="if(event.key==='Enter')tryLogin()">
+      <div class="btn-row">
+        <button class="btn" id="reg-btn" onclick="tryLogin()">Увійти</button>
+      </div>
+      <div class="err" id="reg-err"></div>
     </div>
-    <div class="err" id="reg-err"></div>
+
+    <!-- Крок 2: вибір аватара -->
+    <div id="reg-step2" class="hidden">
+      <div class="modal-sub">Майже готово! Оберіть аватар</div>
+      <div class="emoji-grid" id="reg-emojis"></div>
+      <div class="btn-row">
+        <button class="btn" id="finish-btn" onclick="finishRegistration()">Увійти</button>
+      </div>
+      <div class="err" id="reg-err2"></div>
+    </div>
   </div>
 </div>
 

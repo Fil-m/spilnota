@@ -1,35 +1,35 @@
 /* ============================================================
    Спільнота — суспільна мережа в стилі ВК 2013
-   Механіка: JSON-файли в GitHub-репо + GitHub Contents API
-   (поллінг + merge по sha, retry на 409) — як у Habitat OS.
+   Децентралізована схема: у кожного користувача СВІЙ репозиторій
+   spilnota-<нік>. Пости/лайки/коменти/діалоги = JSON-файли
+   у власному репо. Стрічку збирає браузер з репо всіх учасників.
+   Запис — тільки у своє репо, через особистий токен користувача.
    ============================================================ */
 
 // ================= КОНФІГ =================
 const CONFIG = {
-  owner: 'Fil-m',
-  repo: 'spilnota',
-  // XOR-обфускація токена (як у habitat) — токен із repo-скоупом
-  token: (() => { const h = 'ccc3c4f498daffe6d8ea9be0e1fce1ffc4f3e9dec59dd1faeddad3f1e099faf8c2fb9add9b9eedd3', k = 0xAB, r = []; for (let i = 0; i < h.length; i += 2) r.push(String.fromCharCode(parseInt(h.substr(i, 2), 16) ^ k)); return r.join('') })(),
-  pollMs: 5000,
-  maxPosts: 300,
-  maxMsgs: 500
+  topic: 'spilnota',        // мітка, за якою знаходимо учасників
+  repoPrefix: 'spilnota-',  // префікс імені репо користувача
+  pollMs: 8000,             // поллінг стрічки/діалогів
+  searchMs: 300000,         // перепошук учасників (5 хв)
 };
-const LS_USER = 'spilnota_user';
+const LS_TOKEN = 'spilnota_token';
+const LS_LOGIN = 'spilnota_login';
 const LS_READ = 'spilnota_read_';
-
-const API = `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents`;
+const API = 'https://api.github.com';
 
 // ================= СТАН =================
-let me = null;                  // нік поточного користувача
-let myProfile = null;
-let profiles = {};              // nick -> profile
-let wall = { posts: [] };       // всі пости стіни
-let dialogsIndex = {};          // key -> {lastTs,lastFrom,lastText,lastId}
-let currentDialogKey = null;    // key відкритого діалогу
-let currentDialogMsgs = [];     // повідомлення відкритого діалогу
-const shaCache = {};            // path -> sha
-let lastRenderSig = '';         // для уникнення зайвих рендерів
-let regEmoji = '🦊';
+let me = null;              // GitHub логін поточного користувача
+let token = null;           // особистий токен користувача
+let myProfile = {};         // мій профіль
+let participants = [];      // [{login, repo}] — усі репо з міткою spilnota
+let wallCache = { posts: [] };    // агрегована стрічка
+let likesCache = [];        // [{postOwner, postId, ts, liker}]
+let commentsCache = [];     // [{postOwner, postId, id, text, ts, author}]
+let dialogsCache = {};      // peer -> [msgs]
+let currentDialogPeer = null;
+let lastRenderSig = '';
+let lastSearch = 0;
 const AVATAR_COLORS = ['#45688E','#4C6E99','#5E81A8','#2B7A6E','#7A5E8E','#8E5E5E','#5E8E6E','#8E7A5E','#4E7291','#6E4E91'];
 const EMOJIS = ['🦊','🐱','🐶','🐻','🐼','🦁','🐸','🐵','🐨','🐰','🦄','🐲','🐳','🦉','🐺','🦋','🐝','🐢','🐙','🦀','🌻','🍀','🔥','⭐','🌙','⚡','🎮','🎬','🎵','📚','🎨','🧩'];
 
@@ -82,7 +82,6 @@ function avatarHtml(name, emoji, size) {
   const cls = size === 'sm' ? ' avatar sm' : size === 'xs' ? ' avatar xs' : ' avatar';
   return `<div class="${cls}" style="background:${avatarColor(name)}">${emoji || '🙂'}</div>`;
 }
-function dialogKey(a, b) { return [a, b].sort().join('__'); }
 function toast(msg) {
   const t = $('toast');
   t.textContent = msg;
@@ -90,168 +89,200 @@ function toast(msg) {
   clearTimeout(t._tm);
   t._tm = setTimeout(() => t.classList.add('hidden'), 2500);
 }
+function myRepoName() { return CONFIG.repoPrefix + me; }
 
-// ================= GITHUB SYNC (механіка habitat) =================
-async function ghGet(path) {
-  const r = await fetch(`${API}/${path}`, {
-    headers: { Authorization: 'Bearer ' + CONFIG.token, Accept: 'application/vnd.github.v3+json' }
-  });
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error('GET ' + path + ' -> ' + r.status);
-  const d = await r.json();
-  shaCache[path] = d.sha;
-  return JSON.parse(fromBase64(d.content));
+// ================= GITHUB API (з токеном користувача) =================
+async function gh(url, opts = {}) {
+  const headers = { Accept: 'application/vnd.github.v3+json', ...(opts.headers || {}) };
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const r = await fetch(API + url, { ...opts, headers });
+  return r;
 }
-async function ghPut(path, data) {
-  const getR = await fetch(`${API}/${path}`, {
-    headers: { Authorization: 'Bearer ' + CONFIG.token, Accept: 'application/vnd.github.v3+json' }
-  });
-  if (getR.ok) shaCache[path] = (await getR.json()).sha;
+async function ghJson(url, opts) {
+  const r = await gh(url, opts);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(url + ' -> ' + r.status);
+  return r.json();
+}
+// Читання файлу з БУДЬ-ЯКОГО репо (публічного) через raw.githubusercontent
+// — без токена, без лімітів API, з CORS. Кешується CDN ~хвилини (ок для стрічки).
+async function readFile(owner, repo, path) {
+  const r = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/main/${path}`);
+  if (!r.ok) return null;
+  return r.json();
+}
+// Читання свого файлу (або дефолт) — теж через raw
+async function readMyFile(path, fallback) {
+  try {
+    const d = await readFile(me, myRepoName(), path);
+    return d ?? fallback;
+  } catch (e) { return fallback; }
+}
+// Запис файлу у СВОЄ репо через GitHub Contents API (merge по sha, retry 409)
+async function writeMyFile(path, data) {
+  const url = `/repos/${me}/${myRepoName()}/contents/${path}`;
+  const getR = await gh(url);
+  let sha = null;
+  if (getR.ok) sha = (await getR.json()).sha;
   const payload = {
     message: '✍ Спільнота: ' + path,
     content: toBase64(JSON.stringify(data, null, 1)),
-    sha: shaCache[path]
+    sha: sha
   };
-  let r = await fetch(`${API}/${path}`, {
-    method: 'PUT',
-    headers: { Authorization: 'Bearer ' + CONFIG.token, 'Content-Type': 'application/json', Accept: 'application/vnd.github.v3+json' },
-    body: JSON.stringify(payload)
-  });
-  if (r.ok) { shaCache[path] = (await r.json()).content.sha; return true; }
-  if (r.status === 409) {  // retry once: re-read sha
-    const rr = await fetch(`${API}/${path}`, {
-      headers: { Authorization: 'Bearer ' + CONFIG.token, Accept: 'application/vnd.github.v3+json' }
-    });
+  let r = await gh(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (r.ok) return true;
+  if (r.status === 409) {
+    const rr = await gh(url);
     if (rr.ok) {
-      shaCache[path] = (await rr.json()).sha;
-      payload.sha = shaCache[path];
-      const r2 = await fetch(`${API}/${path}`, {
-        method: 'PUT',
-        headers: { Authorization: 'Bearer ' + CONFIG.token, 'Content-Type': 'application/json', Accept: 'application/vnd.github.v3+json' },
-        body: JSON.stringify(payload)
-      });
-      if (r2.ok) { shaCache[path] = (await r2.json()).content.sha; return true; }
+      payload.sha = (await rr.json()).sha;
+      const r2 = await gh(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      return r2.ok;
     }
   }
   return false;
 }
-// Читає JSON з репо або дефолт (для першого запуску)
-async function loadJson(path, fallback) {
+
+// ================= ПОШУК УЧАСНИКІВ (topic:spilnota) =================
+async function searchParticipants(force) {
+  if (!force && Date.now() - lastSearch < CONFIG.searchMs && participants.length) return participants;
   try {
-    const d = await ghGet(path);
-    return d ?? fallback;
-  } catch (e) { return fallback; }
+    const q = encodeURIComponent('topic:' + CONFIG.topic);
+    const r = await ghJson(`/search/repositories?q=${q}&per_page=100`);
+    if (r && Array.isArray(r.items)) {
+      participants = r.items
+        .filter(it => !it.fork && it.name.startsWith(CONFIG.repoPrefix))
+        .map(it => ({ login: it.owner.login, repo: it.name }));
+      lastSearch = Date.now();
+    }
+  } catch (e) { /* офлайн — лишаємо старий список */ }
+  return participants;
+}
+
+// ================= СТРІЧКА (агрегація браузером) =================
+async function refreshWall() {
+  const list = await searchParticipants();
+  const posts = [];
+  for (const p of list) {
+    if (p.login === me) continue; // своє читаємо з кешу нижче
+    try {
+      const w = await readFile(p.login, p.repo, 'data/wall.json');
+      if (w && Array.isArray(w.posts)) posts.push(...w.posts.map(x => ({ ...x, repoOwner: p.login })));
+    } catch (e) { /* репо без даних */ }
+  }
+  // свої пости
+  const myW = await readMyFile('data/wall.json', { posts: [] });
+  if (myW && Array.isArray(myW.posts)) posts.push(...myW.posts.map(x => ({ ...x, repoOwner: me })));
+  wallCache.posts = posts.sort((a, b) => b.ts - a.ts);
+}
+async function refreshLikes() {
+  const list = await searchParticipants();
+  const likes = [];
+  for (const p of list) {
+    try {
+      const d = await readFile(p.login, p.repo, 'data/likes.json');
+      if (d && Array.isArray(d.likes)) likes.push(...d.likes.map(x => ({ ...x, liker: p.login })));
+    } catch (e) { }
+  }
+  likesCache = likes;
+}
+async function refreshComments() {
+  const list = await searchParticipants();
+  const comments = [];
+  for (const p of list) {
+    try {
+      const d = await readFile(p.login, p.repo, 'data/comments.json');
+      if (d && Array.isArray(d.comments)) comments.push(...d.comments.map(x => ({ ...x, author: p.login })));
+    } catch (e) { }
+  }
+  commentsCache = comments;
 }
 
 // ================= ПРОФІЛІ =================
-async function loadProfiles() {
-  const d = await loadJson('data/profiles.json', {});
-  if (d && typeof d === 'object') profiles = d;
+async function profileOf(login) {
+  if (login === me) return myProfile;
+  try {
+    const p = await readFile(login, CONFIG.repoPrefix + login, 'data/profile.json');
+    return p || { name: login, emoji: '🙂' };
+  } catch (e) { return { name: login, emoji: '🙂' }; }
 }
-async function saveProfiles() {
-  return ghPut('data/profiles.json', profiles);
-}
-function registerOnGitHub(profile) {
-  return loadProfiles().then(() => {
-    profiles[me] = profile;
-    return saveProfiles();
-  });
+async function loadMyProfile() {
+  myProfile = await readMyFile('data/profile.json', null);
+  if (!myProfile) myProfile = { name: me, emoji: '🦊', status: '', city: '', about: '', joined: Date.now() };
 }
 
-// ================= СТІНА =================
-async function loadWall() {
-  const d = await loadJson('data/wall.json', { posts: [] });
-  if (d && Array.isArray(d.posts)) wall = d;
+// ================= ДІАЛОГИ (outbox-схема, як пошта) =================
+async function refreshDialogs() {
+  const list = await searchParticipants();
+  dialogsCache = {};
+  // мої вихідні (у моєму репо)
+  for (const p of list) {
+    if (p.login === me) continue;
+    const msgs = await readMyFile('data/outbox/' + p.login + '.json', []);
+    if (Array.isArray(msgs) && msgs.length) {
+      dialogsCache[p.login] = [...(dialogsCache[p.login] || []), ...msgs];
+    }
+  }
+  // вхідні: читаємо outbox/<me>.json у кожного учасника
+  for (const p of list) {
+    if (p.login === me) continue;
+    try {
+      const msgs = await readFile(p.login, p.repo, 'data/outbox/' + me + '.json');
+      if (Array.isArray(msgs) && msgs.length) {
+        dialogsCache[p.login] = [...(dialogsCache[p.login] || []), ...msgs];
+      }
+    } catch (e) { }
+  }
+  // сортуємо кожен діалог по часу
+  for (const k in dialogsCache) dialogsCache[k].sort((a, b) => a.ts - b.ts);
 }
-async function saveWall() {
-  wall.posts = wall.posts.slice(-CONFIG.maxPosts);
-  return ghPut('data/wall.json', wall);
-}
-// Оновлення стіни зі злиттям (читаємо свіже з репо, застосовуємо зміну, пишемо)
-async function mutateWall(mutator) {
-  await loadWall();                       // свіжий стан з репо
-  const changed = mutator(wall);          // мутація: додати пост / лайк / коментар
-  if (changed === false) return false;
-  const ok = await saveWall();
-  if (ok) renderScreen();
-  else toast('❌ Не вдалося зберегти (перевірте інтернет)');
+async function sendMessage(peer, text) {
+  const path = 'data/outbox/' + peer + '.json';
+  const msgs = await readMyFile(path, []);
+  const msg = { id: uid(), from: me, to: peer, text: text, ts: Date.now() };
+  msgs.push(msg);
+  const ok = await writeMyFile(path, msgs.slice(-500));
+  if (ok) {
+    dialogsCache[peer] = [...(dialogsCache[peer] || []), msg].sort((a, b) => a.ts - b.ts);
+  }
   return ok;
 }
-
-// ================= ДІАЛОГИ =================
-async function loadDialogsIndex() {
-  const d = await loadJson('data/dialogs.json', {});
-  if (d && typeof d === 'object') dialogsIndex = d;
-}
-async function saveDialogsIndex() {
-  return ghPut('data/dialogs.json', dialogsIndex);
-}
-async function loadDialogMsgs(key) {
-  const d = await loadJson('data/dialogs/' + key + '.json', []);
-  if (Array.isArray(d)) currentDialogMsgs = d;
-}
-async function saveDialogMsgs(key) {
-  currentDialogMsgs = currentDialogMsgs.slice(-CONFIG.maxMsgs);
-  return ghPut('data/dialogs/' + key + '.json', currentDialogMsgs);
-}
-// Надіслати повідомлення: читаємо діалог, додаємо, пишемо + оновлюємо індекс
-async function sendMessage(peer, text) {
-  const key = dialogKey(me, peer);
-  await loadDialogMsgs(key);
-  const msg = { id: uid(), from: me, text: text, ts: Date.now() };
-  currentDialogMsgs.push(msg);
-  const ok = await saveDialogMsgs(key);
-  if (!ok) { toast('❌ Не вдалося надіслати'); return false; }
-  // оновити індекс діалогів (для списку та непрочитаних)
-  await loadDialogsIndex();
-  dialogsIndex[key] = { lastTs: msg.ts, lastFrom: me, lastText: text.slice(0, 80), lastId: msg.id };
-  await saveDialogsIndex();
-  return true;
-}
-function readTs(key) { return +(localStorage.getItem(LS_READ + key) || 0); }
-function setRead(key, ts) { localStorage.setItem(LS_READ + key, String(ts)); }
-function isUnread(key) {
-  const d = dialogsIndex[key];
-  if (!d || !me || d.lastFrom === me) return false;
-  return d.lastTs > readTs(key);
+function readTs(peer) { return +(localStorage.getItem(LS_READ + peer) || 0); }
+function setRead(peer, ts) { localStorage.setItem(LS_READ + peer, String(ts)); }
+function unreadFor(peer) {
+  const msgs = dialogsCache[peer] || [];
+  return msgs.filter(m => m.from === peer && m.ts > readTs(peer)).length;
 }
 function unreadCount() {
   let n = 0;
-  for (const k in dialogsIndex) if (isUnread(k)) n++;
+  for (const k in dialogsCache) n += unreadFor(k);
   return n;
 }
 
-// ================= РОУТЕР =================
+const CONTENT = () => $('content');
 function parseHash() {
   let h = location.hash.replace(/^#\/?/, '') || 'me';
   const parts = h.split('/');
   return { screen: parts[0] || 'me', param: decodeURIComponent(parts[1] || '') };
 }
-function navigate(screen, param) {
-  location.hash = param ? '#/' + screen + '/' + encodeURIComponent(param) : '#/' + screen;
-}
 function go(url) { location.hash = url; }
 
 // ================= РЕНДЕР =================
-const CONTENT = () => $('content');
 function renderHeader() {
   const hu = $('header-user');
-  if (me && myProfile) {
+  if (me) {
     hu.innerHTML = avatarHtml(me, myProfile.emoji, 'sm') +
-      `<span class="hu-name" onclick="go('me')">${esc(myProfile.name)}</span>`;
-  } else if (me) {
-    hu.innerHTML = `<span class="hu-name" onclick="go('me')">${esc(me)}</span>`;
+      `<span class="hu-name" onclick="go('me')">${esc(myProfile.name || me)}</span>`;
   } else hu.innerHTML = '';
   const mf = $('menu-foot');
-  if (me) mf.textContent = 'Ви увійшли як ' + me;
+  if (me) mf.innerHTML = `Ви увійшли як <b>${esc(me)}</b><br><a href="javascript:void(0)" onclick="logout()" style="font-size:11px">Вийти</a>`;
 }
 function renderNav() {
   const { screen } = parseHash();
   document.querySelectorAll('[data-nav]').forEach(el => {
     el.classList.toggle('active', el.dataset.nav === screen);
   });
-  const cnt = $('msg-counter');
   const n = unreadCount();
+  const cnt = $('msg-counter');
   cnt.textContent = n > 0 ? String(n) : '';
 }
 function renderScreen() {
@@ -271,8 +302,8 @@ function renderScreen() {
 
 // ---- Сторінка користувача (моя) ----
 function renderMyPage() {
-  const p = profiles[me] || myProfile || { name: me, emoji: '🦊', status: '', about: '', city: '' };
-  const myPosts = wall.posts.filter(x => x.author === me).sort((a, b) => b.ts - a.ts);
+  const p = myProfile;
+  const myPosts = wallCache.posts.filter(x => x.repoOwner === me);
   CONTENT().innerHTML = `
     <div class="card">
       <div class="profile-head">
@@ -283,6 +314,7 @@ function renderMyPage() {
           <div class="profile-dt"><b>Місто:</b> ${esc(p.city || '—')}</div>
           <div class="profile-dt"><b>Про себе:</b> ${esc(p.about || '—')}</div>
           <div class="profile-dt"><b>У Спільноті з:</b> ${p.joined ? fmtDate(p.joined) : '—'}</div>
+          <div class="profile-dt"><b>Мій репозиторій:</b> <a href="https://github.com/${esc(me)}/${esc(myRepoName())}" target="_blank">${esc(myRepoName())} ↗</a></div>
           <div class="btn-row">
             <button class="btn gray" onclick="go('edit')">✏ Редагувати</button>
           </div>
@@ -302,13 +334,12 @@ function renderMyPage() {
 
 // ---- Стрічка ----
 function renderFeed() {
-  const p = profiles[me] || myProfile || { name: me, emoji: '🦊' };
-  const posts = [...wall.posts].sort((a, b) => b.ts - a.ts);
+  const posts = [...wallCache.posts].sort((a, b) => b.ts - a.ts);
   CONTENT().innerHTML = `
     <div class="card">
       <div class="card-title">Стрічка</div>
       <div class="quick-post">
-        ${avatarHtml(me, p.emoji, 'sm')}
+        ${avatarHtml(me, myProfile.emoji, 'sm')}
         <input class="input" id="new-post" placeholder="Поділіться новиною..." maxlength="2000">
         <button class="btn" onclick="submitPost()">Написати</button>
       </div>
@@ -320,36 +351,40 @@ function renderPostList(posts) {
   if (!posts.length) return `<div class="empty">Поки що тут порожньо. Напишіть перший пост!</div>`;
   return posts.map(postHtml).join('');
 }
+function postLikes(post) {
+  return likesCache.filter(l => l.postOwner === post.repoOwner && l.postId === post.id);
+}
+function postComments(post) {
+  return commentsCache.filter(c => c.postOwner === post.repoOwner && c.postId === post.id).sort((a, b) => a.ts - b.ts);
+}
 function postHtml(post) {
-  const author = profiles[post.author] || { name: post.author, emoji: '🦊' };
-  const liked = me && (post.likes || []).includes(me);
-  const likes = post.likes || [];
-  const comments = post.comments || [];
+  const owner = post.repoOwner;
+  const liked = likesCache.some(l => l.postOwner === owner && l.postId === post.id && l.liker === me);
+  const likes = postLikes(post);
+  const comments = postComments(post);
   return `
   <div class="post">
     <div class="post-head">
-      ${avatarHtml(post.author, author.emoji)}
+      ${avatarHtml(owner, (owner === me ? myProfile.emoji : '🙂'))}
       <div class="post-info">
-        <div><a class="post-author" href="#/user/${encodeURIComponent(post.author)}">${esc(author.name || post.author)}</a>
+        <div><a class="post-author" href="#/user/${encodeURIComponent(owner)}">${esc(owner)}</a>
         <span class="post-time"> · ${timeAgo(post.ts)}</span></div>
         <div class="post-text">${esc(post.text)}</div>
       </div>
     </div>
     <div class="post-actions">
-      <a href="javascript:void(0)" class="${liked ? 'liked' : ''}" onclick="toggleLike('${post.id}')">👍 Мені подобається${likes.length ? ' (' + likes.length + ')' : ''}</a>
-      <a href="javascript:void(0)" onclick="focusComment('${post.id}')">💬 Коментувати${comments.length ? ' (' + comments.length + ')' : ''}</a>
+      <a href="javascript:void(0)" class="${liked ? 'liked' : ''}" onclick="toggleLike('${owner}','${post.id}')">👍 Мені подобається${likes.length ? ' (' + likes.length + ')' : ''}</a>
+      <a href="javascript:void(0)" onclick="focusComment('${owner}','${post.id}')">💬 Коментувати${comments.length ? ' (' + comments.length + ')' : ''}</a>
     </div>
-    ${comments.length ? `<div class="comments">${comments.map(c => {
-      const ca = profiles[c.author] || { name: c.author, emoji: '🦊' };
-      return `<div class="comment">${avatarHtml(c.author, ca.emoji, 'xs')}
-        <div class="c-body"><span class="c-author">${esc(ca.name || c.author)}</span> ${esc(c.text)}
-        <div class="c-time">${timeAgo(c.ts)}</div></div></div>`;
-    }).join('')}</div>` : ''}
-    <div class="comments hidden" id="cmt-${post.id}">
+    ${comments.length ? `<div class="comments">${comments.map(c => `
+      <div class="comment">${avatarHtml(c.author, '🙂', 'xs')}
+        <div class="c-body"><span class="c-author">${esc(c.author)}</span> ${esc(c.text)}
+        <div class="c-time">${timeAgo(c.ts)}</div></div></div>`).join('')}</div>` : ''}
+    <div class="comments hidden" id="cmt-${owner}-${post.id}">
       <div class="comment-input">
-        ${avatarHtml(me, (myProfile||{}).emoji || '🦊', 'xs')}
-        <input class="input" id="cmt-in-${post.id}" placeholder="Написати коментар..." maxlength="500">
-        <button class="btn gray" onclick="submitComment('${post.id}')">OK</button>
+        ${avatarHtml(me, myProfile.emoji, 'xs')}
+        <input class="input" id="cmt-in-${owner}-${post.id}" placeholder="Написати коментар..." maxlength="500">
+        <button class="btn gray" onclick="submitComment('${owner}','${post.id}')">OK</button>
       </div>
     </div>
   </div>`;
@@ -357,58 +392,54 @@ function postHtml(post) {
 
 // ---- Люди ----
 function renderPeople() {
-  const list = Object.entries(profiles).sort((a, b) => (a[1].name || a[0]).localeCompare(b[1].name || b[0]));
+  const list = participants.filter(p => p.login !== me);
   CONTENT().innerHTML = `
     <div class="card">
-      <div class="card-title">Люди у Спільноті (${list.length})</div>
+      <div class="card-title">Люди у Спільноті (${list.length + 1})</div>
       <div class="people-grid">
-        ${list.map(([nick, p]) => `
-          <div class="person" onclick="go('user/' + encodeURIComponent('${nick}'))">
-            ${avatarHtml(nick, p.emoji)}
-            <div class="p-name">${esc(p.name || nick)}</div>
-            <div class="offline">${p.city || ''}</div>
+        <div class="person" onclick="go('me')">
+          ${avatarHtml(me, myProfile.emoji)}
+          <div class="p-name">${esc(myProfile.name || me)}</div>
+          <div class="offline">це ви</div>
+        </div>
+        ${list.map(p => `
+          <div class="person" onclick="go('user/' + encodeURIComponent('${p.login}'))">
+            ${avatarHtml(p.login, '🙂')}
+            <div class="p-name">${esc(p.login)}</div>
+            <div class="offline">${esc(p.repo)}</div>
           </div>`).join('')}
-        ${!list.length ? '<div class="empty">Поки що тут порожньо.</div>' : ''}
       </div>
     </div>`;
 }
 
 // ---- Профіль іншого користувача ----
 function renderUserPage(nick) {
-  const p = profiles[nick];
-  if (!p) {
-    CONTENT().innerHTML = `<div class="card"><div class="empty">Користувача «${esc(nick)}» не знайдено</div></div>`;
-    return;
-  }
-  const posts = wall.posts.filter(x => x.author === nick).sort((a, b) => b.ts - a.ts);
+  const posts = wallCache.posts.filter(x => x.repoOwner === nick).sort((a, b) => b.ts - a.ts);
   const canMsg = me && me !== nick;
   CONTENT().innerHTML = `
     <div class="card">
       <div class="profile-head">
-        <div class="profile-avatar" style="background:${avatarColor(nick)}">${p.emoji || '🦊'}</div>
+        <div class="profile-avatar" style="background:${avatarColor(nick)}">🙂</div>
         <div class="profile-info">
-          <div class="profile-name">${esc(p.name || nick)} <span class="online">● в мережі</span></div>
-          <div class="profile-status">${p.status ? '«' + esc(p.status) + '»' : ''}</div>
-          <div class="profile-dt"><b>Місто:</b> ${esc(p.city || '—')}</div>
-          <div class="profile-dt"><b>Про себе:</b> ${esc(p.about || '—')}</div>
-          <div class="profile-dt"><b>У Спільноті з:</b> ${p.joined ? fmtDate(p.joined) : '—'}</div>
+          <div class="profile-name">${esc(nick)} <span class="online">● в мережі</span></div>
+          <div class="profile-dt"><b>Репозиторій:</b> <a href="https://github.com/${esc(nick)}/${esc(CONFIG.repoPrefix + nick)}" target="_blank">${esc(CONFIG.repoPrefix + nick)} ↗</a></div>
           ${canMsg ? `<div class="btn-row"><button class="btn" onclick="go('dialog/' + encodeURIComponent('${nick}'))">💬 Написати повідомлення</button></div>` : ''}
         </div>
       </div>
     </div>
     <div class="card">
-      <div class="card-title">Стіна ${esc(p.name || nick)}</div>
+      <div class="card-title">Стіна ${esc(nick)}</div>
       ${renderPostList(posts)}
     </div>`;
 }
 
 // ---- Редагування профілю ----
 function renderEdit() {
-  const p = profiles[me] || { name: me, emoji: '🦊', status: '', about: '', city: '' };
+  const p = myProfile;
   CONTENT().innerHTML = `
     <div class="card">
       <div class="card-title">Редагування профілю</div>
-      <label>Ім'я / нік</label>
+      <label>Ім'я / нік (відображається)</label>
       <input class="input" id="e-name" maxlength="24" value="${esc(p.name || me)}">
       <div style="height:8px"></div>
       <label>Аватар</label>
@@ -433,23 +464,27 @@ let editEmoji = null;
 
 // ---- Повідомлення (список діалогів) ----
 function renderMessages() {
-  const list = Object.entries(dialogsIndex)
-    .filter(([k, d]) => d && k.split('__').includes(me))
-    .sort((a, b) => (b[1].lastTs || 0) - (a[1].lastTs || 0));
-  const items = list.map(([key, d]) => {
-    const peer = key.split('__').find(x => x !== me);
-    const pp = profiles[peer] || { name: peer, emoji: '🦊' };
-    const un = isUnread(key);
+  const peers = Object.keys(dialogsCache)
+    .filter(k => dialogsCache[k] && dialogsCache[k].length)
+    .sort((a, b) => {
+      const la = dialogsCache[a][dialogsCache[a].length - 1];
+      const lb = dialogsCache[b][dialogsCache[b].length - 1];
+      return (lb.ts || 0) - (la.ts || 0);
+    });
+  const items = peers.map(peer => {
+    const msgs = dialogsCache[peer];
+    const last = msgs[msgs.length - 1];
+    const un = unreadFor(peer);
     return `
-    <div class="dialog-item ${currentDialogKey === key ? 'active' : ''}" onclick="go('dialog/' + encodeURIComponent('${peer}'))">
-      ${avatarHtml(peer, pp.emoji, 'sm')}
+    <div class="dialog-item ${currentDialogPeer === peer ? 'active' : ''}" onclick="go('dialog/' + encodeURIComponent('${peer}'))">
+      ${avatarHtml(peer, '🙂', 'sm')}
       <div class="d-info">
-        <div class="d-name">${esc(pp.name || peer)}</div>
-        <div class="d-prev">${d.lastFrom === me ? 'Ви: ' : ''}${esc(d.lastText || '')}</div>
+        <div class="d-name">${esc(peer)}</div>
+        <div class="d-prev">${last.from === me ? 'Ви: ' : ''}${esc(last.text || '')}</div>
       </div>
       <div style="text-align:right">
-        <div class="d-time">${d.lastTs ? timeAgo(d.lastTs) : ''}</div>
-        ${un ? '<div class="d-unread">1</div>' : ''}
+        <div class="d-time">${last.ts ? timeAgo(last.ts) : ''}</div>
+        ${un ? '<div class="d-unread">' + un + '</div>' : ''}
       </div>
     </div>`;
   }).join('');
@@ -462,16 +497,14 @@ function renderMessages() {
 
 // ---- Діалог ----
 function renderDialog(peer) {
-  const key = dialogKey(me, peer);
-  currentDialogKey = key;
-  setRead(key, Date.now());
-  const pp = profiles[peer] || { name: peer, emoji: '🦊' };
-  const msgs = [...currentDialogMsgs];
+  currentDialogPeer = peer;
+  setRead(peer, Date.now());
+  const msgs = dialogsCache[peer] || [];
   const html = msgs.map(m => {
     const mine = m.from === me;
     return `<div class="msg ${mine ? 'mine' : 'theirs'}">
       <div class="m-bubble">
-        ${mine ? '' : `<div class="m-author">${esc((profiles[m.from] || {}).name || m.from)}</div>`}
+        ${mine ? '' : `<div class="m-author">${esc(m.from)}</div>`}
         <div>${esc(m.text)}</div>
         <div class="m-time">${fmtClock(m.ts)}</div>
       </div>
@@ -482,8 +515,8 @@ function renderDialog(peer) {
       <div class="msgs-wrap">
         <div class="chat-pane">
           <div class="chat-head">
-            <a href="#/user/${encodeURIComponent(peer)}">${avatarHtml(peer, pp.emoji, 'xs')}</a>
-            <a href="#/user/${encodeURIComponent(peer)}">${esc(pp.name || peer)}</a>
+            <a href="#/user/${encodeURIComponent(peer)}">${avatarHtml(peer, '🙂', 'xs')}</a>
+            <a href="#/user/${encodeURIComponent(peer)}">${esc(peer)}</a>
           </div>
           <div class="chat-messages" id="chat-msgs">${html || '<div class="empty">Напишіть перше повідомлення</div>'}</div>
           <div class="chat-input-row">
@@ -499,42 +532,45 @@ function renderDialog(peer) {
   if (inp) { inp.focus(); inp.onkeydown = e => { if (e.key === 'Enter') submitMsg(encodeURIComponent(peer)); }; }
 }
 
-// ---- Авторизація (гейт, поки не зареєстровані) ----
+// ---- Гейт ----
 function renderAuthGate() {
   CONTENT().innerHTML = `<div class="card"><div class="empty">Будь ласка, увійдіть до Спільноти.</div></div>`;
 }
 
-// ================= ПОЛЛІНГ (як habitat: тільки активний екран) =================
+// ================= ПОЛЛІНГ =================
 let pollTimer = null;
+let socialTimer = null;
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     const { screen, param } = parseHash();
     if (!me) return;
     try {
+      await searchParticipants();
       if (screen === 'me' || screen === 'feed' || screen === 'user') {
-        await loadWall();
+        await refreshWall();
       } else if (screen === 'messages') {
-        await loadDialogsIndex();
+        await refreshDialogs();
       } else if (screen === 'dialog') {
-        const key = dialogKey(me, decodeURIComponent(param));
-        const prev = JSON.stringify(currentDialogMsgs);
-        await loadDialogMsgs(key);
-        if (JSON.stringify(currentDialogMsgs) !== prev) { renderScreen(); return; }
-        // оновити непрочитані після відкриття
-        setRead(key, Date.now());
-        renderNav();
+        await refreshDialogs();
       }
-      if (screen === 'people' || screen === 'messages' || screen === 'me' || screen === 'feed' || screen === 'user' || screen === 'dialog') {
-        await loadProfiles();
-      }
-      const sig = screen + '|' + JSON.stringify(wall.posts.map(p => p.id + (p.likes||[]).length + (p.comments||[]).length).slice(-40)) + '|' + JSON.stringify(dialogsIndex) + '|' + Object.keys(profiles).length;
+      const sig = screen + '|' + wallCache.posts.map(p => p.id + (p.likes||0)).join(',') + '|' + JSON.stringify(dialogsCache).length;
       if (sig !== lastRenderSig) { lastRenderSig = sig; renderScreen(); }
       else renderNav();
-    } catch (e) { /* мовчки — офлайн */ }
+    } catch (e) { /* офлайн */ }
   }, CONFIG.pollMs);
+  // лайки/коментарі — рідше (кожні 15с)
+  if (socialTimer) clearInterval(socialTimer);
+  socialTimer = setInterval(async () => {
+    if (!me) return;
+    try {
+      await refreshLikes();
+      await refreshComments();
+      const { screen } = parseHash();
+      if (screen === 'me' || screen === 'feed' || screen === 'user') renderScreen();
+    } catch (e) { }
+  }, 15000);
 }
-function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
 // ================= ДІЇ =================
 async function submitPost() {
@@ -542,37 +578,42 @@ async function submitPost() {
   const text = inp.value.trim();
   if (!text) { toast('✏ Напишіть щось'); return; }
   inp.value = '';
-  const post = { id: uid(), author: me, text: text, ts: Date.now(), likes: [], comments: [] };
-  await mutateWall(w => { w.posts.push(post); });
+  const post = { id: uid(), author: me, text: text, ts: Date.now() };
+  const w = await readMyFile('data/wall.json', { posts: [] });
+  w.posts = w.posts || [];
+  w.posts.push(post);
+  const ok = await writeMyFile('data/wall.json', w);
+  if (!ok) { toast('❌ Не вдалося зберегти'); return; }
+  wallCache.posts.push({ ...post, repoOwner: me });
+  renderScreen();
 }
-async function toggleLike(postId) {
-  await mutateWall(w => {
-    const post = w.posts.find(p => p.id === postId);
-    if (!post) return false;
-    post.likes = post.likes || [];
-    const i = post.likes.indexOf(me);
-    if (i >= 0) post.likes.splice(i, 1); else post.likes.push(me);
-    return true;
-  });
+async function toggleLike(postOwner, postId) {
+  if (postOwner === me) { toast('Свої пости не лайкають 😉'); return; }
+  const d = await readMyFile('data/likes.json', { likes: [] });
+  d.likes = d.likes || [];
+  const i = d.likes.findIndex(l => l.postOwner === postOwner && l.postId === postId);
+  if (i >= 0) d.likes.splice(i, 1); else d.likes.push({ postOwner: postOwner, postId: postId, ts: Date.now() });
+  const ok = await writeMyFile('data/likes.json', d);
+  if (ok) { await refreshLikes(); renderScreen(); }
+  else toast('❌ Не вдалося зберегти');
 }
-function focusComment(postId) {
-  const el = $('cmt-' + postId);
+function focusComment(postOwner, postId) {
+  const el = $('cmt-' + postOwner + '-' + postId);
   if (el) el.classList.remove('hidden');
-  const inp = $('cmt-in-' + postId);
+  const inp = $('cmt-in-' + postOwner + '-' + postId);
   if (inp) inp.focus();
 }
-async function submitComment(postId) {
-  const inp = $('cmt-in-' + postId);
+async function submitComment(postOwner, postId) {
+  const inp = $('cmt-in-' + postOwner + '-' + postId);
   const text = inp.value.trim();
   if (!text) return;
   inp.value = '';
-  await mutateWall(w => {
-    const post = w.posts.find(p => p.id === postId);
-    if (!post) return false;
-    post.comments = post.comments || [];
-    post.comments.push({ id: uid(), author: me, text: text, ts: Date.now() });
-    return true;
-  });
+  const d = await readMyFile('data/comments.json', { comments: [] });
+  d.comments = d.comments || [];
+  d.comments.push({ id: uid(), postOwner: postOwner, postId: postId, text: text, ts: Date.now() });
+  const ok = await writeMyFile('data/comments.json', d);
+  if (ok) { await refreshComments(); renderScreen(); }
+  else toast('❌ Не вдалося зберегти');
 }
 async function submitMsg(encPeer) {
   const peer = decodeURIComponent(encPeer);
@@ -581,8 +622,8 @@ async function submitMsg(encPeer) {
   if (!text) return;
   inp.value = '';
   const ok = await sendMessage(peer, text);
-  if (ok) { await loadDialogMsgs(dialogKey(me, peer)); renderScreen(); }
-  else { inp.value = text; }
+  if (ok) renderScreen();
+  else { inp.value = text; toast('❌ Не вдалося надіслати'); }
 }
 function pickEditEmoji(em, el) {
   editEmoji = em;
@@ -592,97 +633,154 @@ function pickEditEmoji(em, el) {
 async function saveEdit() {
   const name = $('e-name').value.trim();
   if (!name) { $('e-err').textContent = 'Вкажіть ім\u0027я'; return; }
-  const p = profiles[me] || {};
   const updated = {
+    ...myProfile,
     name: name,
-    emoji: editEmoji || p.emoji || '🦊',
+    emoji: editEmoji || myProfile.emoji || '🦊',
     status: $('e-status').value.trim(),
     city: $('e-city').value.trim(),
     about: $('e-about').value.trim(),
-    joined: p.joined || Date.now()
+    joined: myProfile.joined || Date.now()
   };
-  await loadProfiles();
-  profiles[me] = updated;
-  myProfile = updated;
-  const ok = await saveProfiles();
+  const ok = await writeMyFile('data/profile.json', updated);
   if (!ok) { $('e-err').textContent = 'Не вдалося зберегти (перевірте інтернет)'; return; }
+  myProfile = updated;
   toast('✅ Профіль збережено');
   go('me');
 }
+function logout() {
+  if (!confirm('Вийти зі Спільноти?')) return;
+  localStorage.removeItem(LS_TOKEN);
+  localStorage.removeItem(LS_LOGIN);
+  location.reload();
+}
 
-// ================= РЕЄСТРАЦІЯ =================
+// ================= ВХІД ЧЕРЕЗ ТОКЕН =================
 function buildEmojiGrid() {
   $('reg-emojis').innerHTML = EMOJIS.map(e =>
     `<div class="em ${e === regEmoji ? 'sel' : ''}" data-em="${e}" onclick="regPickEmoji('${e}', this)">${e}</div>`).join('');
 }
+let regEmoji = '🦊';
 function regPickEmoji(em, el) {
   regEmoji = em;
   document.querySelectorAll('#reg-emojis .em').forEach(x => x.classList.remove('sel'));
   el.classList.add('sel');
 }
-async function tryRegister() {
-  const raw = $('reg-name').value.trim();
-  if (!raw) { $('reg-err').textContent = 'Вкажіть ім\u0027я або нік'; return; }
-  const name = raw.replace(/__/g, '_').replace(/["'<>]/g, '').slice(0, 24);
-  if (!name) { $('reg-err').textContent = 'Ім\u0027я містить неприпустимі символи'; return; }
+function openTokenStep() {
+  $('reg-title').textContent = 'Вхід у Спільноту';
+  $('reg-sub').innerHTML = '1. <a href="https://github.com/settings/tokens/new?scopes=repo&description=spilnota" target="_blank">Створіть токен на GitHub</a> — галочка <b>repo</b> вже стоїть<br>2. Скопіюйте токен і вставте сюди<br><small>Токен зберігається тільки у вашому браузері.</small>';
+  $('reg-step1').classList.remove('hidden');
+  $('reg-step2').classList.add('hidden');
+  $('reg-err').textContent = '';
+}
+async function tryLogin() {
+  const raw = $('token-input').value.trim();
+  if (!raw) { $('reg-err').textContent = 'Вставте токен'; return; }
   $('reg-btn').disabled = true;
   $('reg-err').textContent = '';
-  // Перевірка колізії імен до запису
-  await loadProfiles();
-  if (profiles[name]) {
+  try {
+    // перевіряємо токен: хто ми?
+    const r = await fetch(API + '/user', { headers: { Authorization: 'Bearer ' + raw, Accept: 'application/vnd.github.v3+json' } });
+    if (!r.ok) {
+      $('reg-btn').disabled = false;
+      $('reg-err').textContent = 'Токен недійсний (' + r.status + '). Спробуйте ще раз.';
+      return;
+    }
+    const user = await r.json();
+    token = raw;
+    me = user.login;
+    // створюємо репо, якщо немає
+    const repoName = CONFIG.repoPrefix + me;
+    const exists = await ghJson(`/repos/${me}/${repoName}`);
+    if (!exists) {
+      const cr = await ghJson('/user/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: repoName, description: 'Моя сторінка у Спільноті', private: false, auto_init: true })
+      });
+      if (!cr) {
+        $('reg-btn').disabled = false;
+        $('reg-err').textContent = 'Не вдалося створити репо. Перевірте, що токен має галочку repo.';
+        return;
+      }
+    }
+    // додаємо мітку spilnota
+    try {
+      await gh(`/repos/${me}/${repoName}/topics`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/vnd.github.mercy-preview+json' },
+        body: JSON.stringify({ names: [CONFIG.topic] })
+      });
+    } catch (e) { /* topic може не створитись — не критично */ }
+    // seed-файли, якщо новий користувач (profile.json ще не існує)
+    const existingProfile = await readFile(me, repoName, 'data/profile.json');
+    if (!existingProfile) {
+      myProfile = { name: user.name || user.login, emoji: regEmoji, status: '', city: '', about: '', joined: Date.now() };
+      await writeMyFile('data/profile.json', myProfile);
+      await writeMyFile('data/wall.json', { posts: [] });
+      await writeMyFile('data/likes.json', { likes: [] });
+      await writeMyFile('data/comments.json', { comments: [] });
+    } else {
+      myProfile = existingProfile;
+    }
+    localStorage.setItem(LS_TOKEN, token);
+    localStorage.setItem(LS_LOGIN, me);
+    // крок 2: вибір аватара
+    $('reg-title').textContent = 'Майже готово!';
+    $('reg-sub').innerHTML = 'Оберіть аватар для вашої сторінки';
+    $('reg-step1').classList.add('hidden');
+    $('reg-step2').classList.remove('hidden');
+    regEmoji = myProfile.emoji || '🦊';
+    buildEmojiGrid();
+  } catch (e) {
     $('reg-btn').disabled = false;
-    $('reg-err').textContent = 'Це ім\u0027я вже зайняте. Оберіть інше.';
-    return;
+    $('reg-err').textContent = 'Помилка: ' + e.message;
   }
-  me = name;
-  const profile = { name: name, emoji: regEmoji, status: '', city: '', about: '', joined: Date.now() };
-  const ok = await registerOnGitHub(profile);
-  if (!ok) {
-    // можливо ім'я зайняте — перевіримо і підкажемо
-    const exists = profiles[name];
-    me = null;
-    $('reg-btn').disabled = false;
-    $('reg-err').textContent = exists ? 'Це ім\u0027я вже зайняте. Оберіть інше.' : 'Не вдалося зберегти профіль. Перевірте інтернет і спробуйте ще раз.';
-    return;
-  }
-  myProfile = profile;
-  localStorage.setItem(LS_USER, me);
+}
+async function finishRegistration() {
+  // зберегти вибраний аватар у профіль
+  myProfile = { ...myProfile, emoji: regEmoji };
+  try { await writeMyFile('data/profile.json', myProfile); } catch (e) { /* не критично */ }
   $('reg-mask').classList.add('hidden');
   renderHeader();
   await refreshAll();
   renderScreen();
-  toast('👋 Вітаємо у Спільноті, ' + name + '!');
+  startPolling();
+  toast('👋 Вітаємо у Спільноті, ' + me + '!');
 }
 
 // ================= СТАРТ =================
 async function refreshAll() {
-  await Promise.all([loadProfiles(), loadWall(), loadDialogsIndex()]);
+  await searchParticipants(true);
+  await Promise.all([refreshWall(), refreshLikes(), refreshComments(), refreshDialogs(), loadMyProfile()]);
 }
 async function init() {
   buildEmojiGrid();
-  me = localStorage.getItem(LS_USER);
-  if (me && profiles[me]) myProfile = profiles[me];
-  await refreshAll();
-  if (me && profiles[me]) myProfile = profiles[me];
-  if (!me) {
+  token = localStorage.getItem(LS_TOKEN);
+  me = localStorage.getItem(LS_LOGIN);
+  if (me && token) {
+    // перевірка токена (м'яка)
+    try {
+      const r = await fetch(API + '/user', { headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github.v3+json' } });
+      if (!r.ok) { token = null; me = null; localStorage.removeItem(LS_TOKEN); localStorage.removeItem(LS_LOGIN); }
+    } catch (e) { /* офлайн — лишаємо сесію */ }
+  }
+  if (!me || !token) {
+    openTokenStep();
     $('reg-mask').classList.remove('hidden');
     renderHeader();
     renderScreen();
   } else {
     renderHeader();
+    await refreshAll();
     renderScreen();
+    startPolling();
   }
-  startPolling();
   window.addEventListener('hashchange', () => {
     if (!me) return;
-    // при відкритті діалогу — завантажити повідомлення
-    const { screen, param } = parseHash();
-    if (screen === 'dialog') {
-      const key = dialogKey(me, decodeURIComponent(param));
-      loadDialogMsgs(key).then(() => renderScreen());
-    } else {
-      renderScreen();
-    }
+    const { screen } = parseHash();
+    if (screen === 'dialog') { refreshDialogs().then(() => renderScreen()); }
+    else renderScreen();
   });
 }
 window.addEventListener('load', init);
