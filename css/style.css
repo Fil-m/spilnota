@@ -1,0 +1,280 @@
+/* ============ Спільнота — стиль ВК 2013 ============ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --blue: #45688E;
+  --blue2: #4C6E99;
+  --blue3: #5E81A8;
+  --link: #2B587A;
+  --bg: #EDEEF0;
+  --card: #FFFFFF;
+  --border: #D8DFEA;
+  --text: #000;
+  --text2: #666;
+  --text3: #999;
+  --green: #4BB34B;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'PT Sans', Tahoma, Arial, sans-serif;
+  font-size: 13px;
+  -webkit-tap-highlight-color: transparent;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- Шапка ---------- */
+.header {
+  background: linear-gradient(to bottom, var(--blue3) 0%, var(--blue) 100%);
+  height: 42px;
+  border-bottom: 1px solid #3A5B7C;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+}
+.header-inner {
+  max-width: 900px; margin: 0 auto; height: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 12px;
+}
+.logo {
+  color: #fff; font-weight: 700; font-size: 17px; letter-spacing: 0.3px;
+  text-shadow: 0 1px 0 rgba(0,0,0,0.25);
+}
+.logo:hover { text-decoration: none; opacity: 0.9; }
+.header-user { display: flex; align-items: center; gap: 8px; }
+.header-user .hu-name { color: #fff; font-weight: 700; cursor: pointer; }
+.header-user .hu-name:hover { text-decoration: underline; }
+
+/* ---------- Каркас ---------- */
+.page {
+  max-width: 900px; margin: 0 auto;
+  display: flex; gap: 0;
+  padding: 54px 0 0;
+  min-height: 100vh;
+}
+.sidebar { width: 190px; flex-shrink: 0; }
+.content { flex: 1; padding: 12px; min-width: 0; }
+
+/* ---------- Ліве меню ---------- */
+.menu {
+  list-style: none;
+  background: var(--card);
+  border: 2px solid var(--border);
+  margin-bottom: 10px;
+}
+.menu li { border-bottom: 1px solid var(--border); }
+.menu li:last-child { border-bottom: none; }
+.menu a {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; font-size: 13px; color: var(--link);
+}
+.menu a:hover { background: #E7EDF3; text-decoration: none; }
+.menu a.active { background: linear-gradient(to bottom, var(--blue3), var(--blue)); color: #fff; }
+.menu .mi { width: 18px; text-align: center; font-size: 14px; }
+.menu .counter {
+  margin-left: auto;
+  background: var(--blue); color: #fff;
+  border-radius: 8px; padding: 1px 7px; font-size: 11px; font-weight: 700;
+}
+.menu a.active .counter { background: #fff; color: var(--blue); }
+.menu-foot { font-size: 11px; color: var(--text3); padding: 0 4px; }
+
+/* ---------- Контент / картки ---------- */
+.card {
+  background: var(--card);
+  border: 2px solid var(--border);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.card-title {
+  font-size: 14px; font-weight: 700; color: var(--text);
+  border-bottom: 1px solid var(--border);
+  margin: -12px -12px 10px; padding: 8px 12px;
+  background: #F5F8FB;
+}
+.hidden { display: none !important; }
+.err { color: #D03333; font-size: 12px; margin-top: 6px; min-height: 14px; }
+
+/* ---------- Пости стіни ---------- */
+.post { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.post:last-child { border-bottom: none; }
+.post-head { display: flex; gap: 10px; align-items: flex-start; }
+.avatar {
+  width: 50px; height: 50px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; border-radius: 2px;
+  user-select: none;
+}
+.avatar.sm { width: 32px; height: 32px; font-size: 18px; }
+.avatar.xs { width: 24px; height: 24px; font-size: 14px; }
+.post-info { flex: 1; min-width: 0; }
+.post-author { font-weight: 700; color: var(--link); font-size: 13px; }
+.post-time { color: var(--text3); font-size: 11px; }
+.post-text { margin-top: 4px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
+.post-actions { margin-top: 6px; font-size: 12px; color: var(--text3); }
+.post-actions a { color: var(--text3); margin-right: 10px; }
+.post-actions a:hover { color: var(--link); text-decoration: underline; }
+.post-actions a.liked { color: var(--blue); font-weight: 700; }
+.post-likes { font-size: 11px; color: var(--text2); margin-top: 2px; }
+
+/* Коментарі */
+.comments { margin-top: 8px; background: #F0F3F7; padding: 8px; }
+.comment { display: flex; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.comment:last-child { margin-bottom: 0; }
+.comment .c-body { flex: 1; min-width: 0; }
+.comment .c-author { font-weight: 700; color: var(--link); }
+.comment .c-time { color: var(--text3); font-size: 10px; }
+.comment-input { display: flex; gap: 6px; margin-top: 6px; }
+
+/* ---------- Форми ---------- */
+.input, .textarea {
+  width: 100%;
+  border: 1px solid #A9B6C5;
+  border-radius: 2px;
+  padding: 5px 8px;
+  font-family: 'PT Sans', Tahoma, sans-serif;
+  font-size: 13px;
+  background: #fff;
+}
+.input:focus, .textarea:focus { outline: none; border-color: var(--blue); }
+.textarea { resize: vertical; min-height: 50px; }
+.btn {
+  display: inline-block;
+  background: linear-gradient(to bottom, #729BC8 0%, #6383A8 100%);
+  border: 1px solid #4E7291;
+  color: #fff; font-weight: 700; font-size: 13px;
+  padding: 5px 16px; border-radius: 2px;
+  cursor: pointer; font-family: 'PT Sans', Tahoma, sans-serif;
+  text-shadow: 0 1px 0 rgba(0,0,0,0.2);
+}
+.btn:hover { background: linear-gradient(to bottom, #7DB2D9 0%, #6C9CC4 100%); text-decoration: none; }
+.btn:active { background: linear-gradient(to bottom, #6383A8 0%, #4E7291 100%); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.gray {
+  background: linear-gradient(to bottom, #F0F3F7 0%, #DCE3EA 100%);
+  border: 1px solid #B5BEC7; color: #333; text-shadow: none;
+}
+.btn.gray:hover { background: linear-gradient(to bottom, #F7F9FB 0%, #E7EDF3 100%); }
+.btn-row { margin-top: 8px; }
+
+/* ---------- Профіль ---------- */
+.profile-head { display: flex; gap: 14px; }
+.profile-avatar {
+  width: 120px; height: 120px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 64px; border-radius: 2px; user-select: none;
+}
+.profile-info { flex: 1; min-width: 0; }
+.profile-name { font-size: 18px; font-weight: 700; }
+.profile-status { font-style: italic; color: var(--text2); margin: 4px 0; }
+.profile-dt { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.profile-dt b { color: var(--text); font-weight: 400; }
+.online { color: var(--green); font-size: 12px; font-weight: 700; }
+.offline { color: var(--text3); font-size: 12px; }
+
+/* ---------- Люди ---------- */
+.people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.person {
+  border: 1px solid var(--border); padding: 10px; text-align: center;
+  cursor: pointer; background: #fff;
+}
+.person:hover { border-color: var(--blue); text-decoration: none; }
+.person .p-avatar { margin: 0 auto 6px; }
+.person .p-name { font-weight: 700; color: var(--link); font-size: 13px; word-wrap: break-word; }
+
+/* ---------- Повідомлення ---------- */
+.msgs-wrap { display: flex; gap: 0; border: 2px solid var(--border); background: #fff; }
+.dialog-list { width: 220px; flex-shrink: 0; border-right: 2px solid var(--border); max-height: 70vh; overflow-y: auto; }
+.dialog-item {
+  display: flex; gap: 8px; padding: 8px; cursor: pointer; align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.dialog-item:hover { background: #E7EDF3; }
+.dialog-item.active { background: linear-gradient(to bottom, var(--blue3), var(--blue)); }
+.dialog-item .d-info { flex: 1; min-width: 0; }
+.dialog-item .d-name { font-weight: 700; font-size: 13px; color: var(--link); }
+.dialog-item.active .d-name, .dialog-item.active .d-prev, .dialog-item.active .d-time { color: #fff; }
+.dialog-item .d-prev { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dialog-item .d-time { font-size: 10px; color: var(--text3); flex-shrink: 0; }
+.dialog-item .d-unread {
+  background: var(--blue); color: #fff; border-radius: 8px;
+  padding: 1px 7px; font-size: 11px; font-weight: 700;
+}
+.dialog-item.active .d-unread { background: #fff; color: var(--blue); }
+
+/* Переписка */
+.chat-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chat-head {
+  padding: 8px 12px; border-bottom: 2px solid var(--border);
+  font-weight: 700; font-size: 14px;
+  display: flex; align-items: center; gap: 8px;
+}
+.chat-messages { flex: 1; padding: 10px; overflow-y: auto; max-height: 55vh; background: #fff; }
+.msg { margin-bottom: 8px; display: flex; }
+.msg .m-bubble {
+  max-width: 75%; padding: 6px 10px; border-radius: 2px;
+  border: 1px solid var(--border); font-size: 13px; word-wrap: break-word;
+}
+.msg.mine { justify-content: flex-end; }
+.msg.mine .m-bubble { background: #E3EFF9; border-color: #B9CDE3; }
+.msg.theirs .m-bubble { background: #fff; }
+.msg .m-author { font-weight: 700; color: var(--link); font-size: 12px; margin-bottom: 2px; }
+.msg .m-time { font-size: 10px; color: var(--text3); margin-top: 2px; text-align: right; }
+.chat-input-row { display: flex; gap: 6px; padding: 8px; border-top: 2px solid var(--border); }
+.chat-input-row .input { flex: 1; }
+
+/* ---------- Модалка ---------- */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center; z-index: 200;
+}
+.modal {
+  background: #fff; border: 2px solid var(--border);
+  width: 320px; max-width: 92vw; padding: 16px;
+}
+.modal-title { font-size: 16px; font-weight: 700; }
+.modal-sub { color: var(--text2); font-size: 12px; margin: 4px 0 10px; }
+.emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin: 8px 0; }
+.emoji-grid .em {
+  font-size: 22px; text-align: center; cursor: pointer;
+  border: 1px solid transparent; border-radius: 2px; padding: 2px;
+}
+.emoji-grid .em:hover { background: #E7EDF3; }
+.emoji-grid .em.sel { border-color: var(--blue); background: #E3EFF9; }
+
+/* ---------- Тоаст ---------- */
+.toast {
+  position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.85); color: #fff;
+  padding: 8px 16px; border-radius: 2px; font-size: 13px; z-index: 300;
+}
+
+/* ---------- Стрічка: швидкий пост ---------- */
+.quick-post { display: flex; gap: 10px; }
+.quick-post .input { flex: 1; }
+.empty { color: var(--text3); text-align: center; padding: 30px 10px; font-size: 13px; }
+
+/* ---------- Мобільна версія ---------- */
+.bottom-nav {
+  display: none;
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+  background: linear-gradient(to bottom, #fff, #EDEEF0);
+  border-top: 2px solid var(--border);
+}
+.bottom-nav a {
+  flex: 1; text-align: center; padding: 6px 0 4px;
+  font-size: 18px; color: var(--link);
+}
+.bottom-nav a small { display: block; font-size: 9px; font-weight: 700; }
+.bottom-nav a.active { background: linear-gradient(to bottom, var(--blue3), var(--blue)); color: #fff; }
+
+@media (max-width: 700px) {
+  .page { padding-bottom: 54px; }
+  .sidebar { display: none; }
+  .bottom-nav { display: flex; }
+  .header-user .hu-name { display: none; }
+  .dialog-list { width: 100%; max-height: none; border-right: none; }
+  .msgs-wrap { flex-direction: column; }
+  .chat-messages { max-height: 52vh; }
+  .post-head { gap: 8px; }
+}
