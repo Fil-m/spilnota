@@ -125,8 +125,11 @@ function defaultCfg() {
   return { enabled, font: 'ptsans', theme: 'classic' };
 }
 function getCfg() {
-  try { return { ...defaultCfg(), ...JSON.parse(localStorage.getItem(LS_CFG) || '{}') }; }
-  catch (e) { return defaultCfg(); }
+  try {
+    const cfg = { ...defaultCfg(), ...JSON.parse(localStorage.getItem(LS_CFG) || '{}') };
+    if (cfg.theme === 'vk2013') { cfg.theme = 'classic'; saveCfg(cfg); }
+    return cfg;
+  } catch (e) { return defaultCfg(); }
 }
 function saveCfg(cfg) {
   localStorage.setItem(LS_CFG, JSON.stringify(cfg));
