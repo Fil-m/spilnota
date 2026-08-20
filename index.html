@@ -19,14 +19,9 @@
 </div>
 
 <div class="page">
-  <!-- Ліве меню -->
+  <!-- Ліве меню (генерується з модулів) -->
   <div class="sidebar" id="sidebar">
-    <ul class="menu">
-      <li><a href="#/" data-nav="news"><span class="mi">🏠</span> Моя сторінка</a></li>
-      <li><a href="#/feed" data-nav="feed"><span class="mi">📰</span> Стрічка</a></li>
-      <li><a href="#/messages" data-nav="messages"><span class="mi">💬</span> Повідомлення<span class="counter" id="msg-counter"></span></a></li>
-      <li><a href="#/people" data-nav="people"><span class="mi">👥</span> Люди</a></li>
-    </ul>
+    <ul class="menu"></ul>
     <div class="menu-foot" id="menu-foot"></div>
   </div>
 
@@ -34,13 +29,8 @@
   <div class="content" id="content"></div>
 </div>
 
-<!-- Мобільна нижня навігація -->
-<div class="bottom-nav">
-  <a href="#/" data-nav="news">🏠<br><small>Сторінка</small></a>
-  <a href="#/feed" data-nav="feed">📰<br><small>Стрічка</small></a>
-  <a href="#/messages" data-nav="messages">💬<br><small>Чати</small></a>
-  <a href="#/people" data-nav="people">👥<br><small>Люди</small></a>
-</div>
+<!-- Мобільна нижня навігація (генерується з модулів) -->
+<div class="bottom-nav" id="bottom-nav"></div>
 
 <!-- Модалка входу (особистий GitHub-токен) -->
 <div class="modal-mask hidden" id="reg-mask">
@@ -72,6 +62,6 @@
 <!-- Тоаст -->
 <div class="toast hidden" id="toast"></div>
 
-<script src="js/app.js?v=2"></script>
+<script src="js/app.js?v=3"></script>
 </body>
 </html>

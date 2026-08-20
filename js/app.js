@@ -1,43 +1,147 @@
 /* ============================================================
    Спільнота — суспільна мережа в стилі ВК 2013
-   Децентралізована схема: у кожного користувача СВІЙ репозиторій
-   spilnota-<нік>. Пости/лайки/коменти/діалоги = JSON-файли
-   у власному репо. Стрічку збирає браузер з репо всіх учасників.
-   Запис — тільки у своє репо, через особистий токен користувача.
+   Децентралізована: у кожного СВІЙ репо spilnota-<нік>.
+   МОДУЛЬНА СИСТЕМА: профіль/стіна/чат/люди/налаштування —
+   вмикаються і вимикаються в налаштуваннях.
    ============================================================ */
 
 // ================= КОНФІГ =================
 const CONFIG = {
-  topic: 'spilnota',        // мітка, за якою знаходимо учасників
-  repoPrefix: 'spilnota-',  // префікс імені репо користувача
-  pollMs: 8000,             // поллінг стрічки/діалогів
-  searchMs: 300000,         // перепошук учасників (5 хв)
+  topic: 'spilnota',
+  repoPrefix: 'spilnota-',
+  pollMs: 8000,
+  searchMs: 300000,
 };
 const LS_TOKEN = 'spilnota_token';
 const LS_LOGIN = 'spilnota_login';
 const LS_READ = 'spilnota_read_';
+const LS_CFG = 'spilnota_cfg';
 const API = 'https://api.github.com';
 
+// ================= ТЕМИ ТА ШРИФТИ =================
+const THEMES = {
+  vk2013: {
+    name: 'ВК 2013',
+    css: {
+      '--header-top': '#5E81A8', '--header-bottom': '#45688E', '--header-border': '#3A5B7C',
+      '--bg': '#EDEEF0', '--card': '#FFFFFF', '--border': '#D8DFEA',
+      '--link': '#2B587A', '--text': '#000', '--text2': '#666', '--text3': '#999',
+      '--btn-top': '#729BC8', '--btn-bottom': '#6383A8', '--btn-border': '#4E7291',
+      '--green': '#4BB34B', '--mine-bubble': '#E3EFF9', '--mine-border': '#B9CDE3', '--comment-bg': '#F0F3F7'
+    }
+  },
+  dark: {
+    name: 'Темна',
+    css: {
+      '--header-top': '#1A1D33', '--header-bottom': '#12152A', '--header-border': '#000',
+      '--bg': '#0B0D19', '--card': '#1E2240', '--border': '#262B50',
+      '--link': '#00F0FF', '--text': '#E0E4F0', '--text2': '#8890B0', '--text3': '#505570',
+      '--btn-top': '#00F0FF', '--btn-bottom': '#00A8B8', '--btn-border': '#006B78',
+      '--green': '#00FF88', '--mine-bubble': '#00A8B8', '--mine-border': '#006B78', '--comment-bg': '#1A1D33'
+    }
+  },
+  forest: {
+    name: 'Лісова',
+    css: {
+      '--header-top': '#4C8C6C', '--header-bottom': '#2E6B50', '--header-border': '#1F4A38',
+      '--bg': '#EAF2EC', '--card': '#FFFFFF', '--border': '#CFE0D4',
+      '--link': '#2E6B50', '--text': '#1A2E22', '--text2': '#5C7567', '--text3': '#8FA69A',
+      '--btn-top': '#6BAE8C', '--btn-bottom': '#4C8C6C', '--btn-border': '#2E6B50',
+      '--green': '#3A8C5C', '--mine-bubble': '#D8EFE0', '--mine-border': '#9FC8B0', '--comment-bg': '#F0F7F2'
+    }
+  },
+  sunset: {
+    name: 'Захід сонця',
+    css: {
+      '--header-top': '#E07B54', '--header-bottom': '#C25A38', '--header-border': '#8F3D24',
+      '--bg': '#FDF1EA', '--card': '#FFFFFF', '--border': '#F0D5C5',
+      '--link': '#C25A38', '--text': '#3A241A', '--text2': '#8A6A5A', '--text3': '#B49A8C',
+      '--btn-top': '#E8986F', '--btn-bottom': '#D0784F', '--btn-border': '#C25A38',
+      '--green': '#6BA85C', '--mine-bubble': '#FBE3D3', '--mine-border': '#E8BEA4', '--comment-bg': '#FBF3ED'
+    }
+  },
+  ocean: {
+    name: 'Океан',
+    css: {
+      '--header-top': '#3E7CB1', '--header-bottom': '#2B5E8C', '--header-border': '#1C4470',
+      '--bg': '#EAF2F8', '--card': '#FFFFFF', '--border': '#C9DCEA',
+      '--link': '#2B5E8C', '--text': '#16283A', '--text2': '#5A768C', '--text3': '#8FA9BC',
+      '--btn-top': '#5E9CD0', '--btn-bottom': '#3E7CB1', '--btn-border': '#2B5E8C',
+      '--green': '#3E9C7C', '--mine-bubble': '#D8EAF7', '--mine-border': '#A4C8E0', '--comment-bg': '#F0F6FA'
+    }
+  }
+};
+const FONTS = {
+  ptsans: { name: 'PT Sans', family: "'PT Sans', Tahoma, Arial, sans-serif" },
+  tahoma: { name: 'Tahoma', family: "Tahoma, Verdana, Arial, sans-serif" },
+  georgia: { name: 'Georgia', family: "Georgia, 'Times New Roman', serif" },
+  mono: { name: 'Моноширинний', family: "'Courier New', Courier, monospace" },
+  comic: { name: 'Comic Sans', family: "'Comic Sans MS', 'Comic Sans', cursive" }
+};
+
+// ================= МОДУЛІ =================
+// Кожен модуль: id, назва, опис, дефолт, список екранів, поллінг
+const MODULE_DEFS = [
+  { id: 'profile', name: 'Профіль', icon: '🏠', desc: 'Моя сторінка, редагування, сторінки користувачів', def: true, screens: ['me', 'edit', 'user'], poll: 'wall' },
+  { id: 'wall', name: 'Стіна (стрічка)', icon: '📰', desc: 'Пости, лайки, коментарі — стрічка всіх', def: true, screens: ['feed'], poll: 'wall' },
+  { id: 'chat', name: 'Повідомлення', icon: '💬', desc: 'Приватні діалоги між користувачами', def: true, screens: ['messages', 'dialog'], poll: 'dialogs' },
+  { id: 'people', name: 'Люди', icon: '👥', desc: 'Список учасників спільноти', def: true, screens: ['people'], poll: null },
+  { id: 'settings', name: 'Налаштування', icon: '⚙️', desc: 'Модулі, шрифт, тема', def: true, screens: ['settings'], poll: null, locked: true }
+];
+
 // ================= СТАН =================
-let me = null;              // GitHub логін поточного користувача
-let token = null;           // особистий токен користувача
-let myProfile = {};         // мій профіль
-let participants = [];      // [{login, repo}] — усі репо з міткою spilnota
-let wallCache = { posts: [] };    // агрегована стрічка
-let likesCache = [];        // [{postOwner, postId, ts, liker}]
-let commentsCache = [];     // [{postOwner, postId, id, text, ts, author}]
-let dialogsCache = {};      // peer -> [msgs]
+let me = null;
+let token = null;
+let myProfile = {};
+let participants = [];
+let wallCache = { posts: [] };
+let likesCache = [];
+let commentsCache = [];
+let dialogsCache = {};
 let currentDialogPeer = null;
 let lastRenderSig = '';
 let lastSearch = 0;
 const AVATAR_COLORS = ['#45688E','#4C6E99','#5E81A8','#2B7A6E','#7A5E8E','#8E5E5E','#5E8E6E','#8E7A5E','#4E7291','#6E4E91'];
 const EMOJIS = ['🦊','🐱','🐶','🐻','🐼','🦁','🐸','🐵','🐨','🐰','🦄','🐲','🐳','🦉','🐺','🦋','🐝','🐢','🐙','🦀','🌻','🍀','🔥','⭐','🌙','⚡','🎮','🎬','🎵','📚','🎨','🧩'];
 
+// ================= НАЛАШТУВАННЯ (cfg) =================
+function defaultCfg() {
+  const enabled = {};
+  for (const m of MODULE_DEFS) enabled[m.id] = m.def;
+  return { enabled, font: 'ptsans', theme: 'vk2013' };
+}
+function getCfg() {
+  try { return { ...defaultCfg(), ...JSON.parse(localStorage.getItem(LS_CFG) || '{}') }; }
+  catch (e) { return defaultCfg(); }
+}
+function saveCfg(cfg) {
+  localStorage.setItem(LS_CFG, JSON.stringify(cfg));
+}
+function moduleEnabled(id) {
+  const cfg = getCfg();
+  const m = MODULE_DEFS.find(x => x.id === id);
+  if (m && m.locked) return true;
+  return cfg.enabled[id] !== false;
+}
+function applyTheme(themeId) {
+  const t = THEMES[themeId] || THEMES.vk2013;
+  const root = document.documentElement;
+  for (const [k, v] of Object.entries(t.css)) root.style.setProperty(k, v);
+}
+function applyFont(fontId) {
+  const f = FONTS[fontId] || FONTS.ptsans;
+  document.documentElement.style.setProperty('--font', f.family);
+}
+function applyCfg() {
+  const cfg = getCfg();
+  applyTheme(cfg.theme);
+  applyFont(cfg.font);
+}
+
 // ================= УТИЛІТИ =================
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-
 function toBase64(str) {
   const bytes = new TextEncoder().encode(str);
   let bin = '';
@@ -50,7 +154,6 @@ function fromBase64(b64) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new TextDecoder().decode(bytes);
 }
-
 const MONTHS = ['січ','лют','бер','кві','тра','чер','лип','сер','вер','жов','лис','гру'];
 function fmtClock(ts) {
   const d = new Date(ts);
@@ -91,7 +194,7 @@ function toast(msg) {
 }
 function myRepoName() { return CONFIG.repoPrefix + me; }
 
-// ================= GITHUB API (з токеном користувача) =================
+// ================= GITHUB API =================
 async function gh(url, opts = {}) {
   const headers = { Accept: 'application/vnd.github.v3+json', ...(opts.headers || {}) };
   if (token) headers.Authorization = 'Bearer ' + token;
@@ -104,21 +207,17 @@ async function ghJson(url, opts) {
   if (!r.ok) throw new Error(url + ' -> ' + r.status);
   return r.json();
 }
-// Читання файлу з БУДЬ-ЯКОГО репо (публічного) через raw.githubusercontent
-// — без токена, без лімітів API, з CORS. Кешується CDN ~хвилини (ок для стрічки).
 async function readFile(owner, repo, path) {
   const r = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/main/${path}`);
   if (!r.ok) return null;
   return r.json();
 }
-// Читання свого файлу (або дефолт) — теж через raw
 async function readMyFile(path, fallback) {
   try {
     const d = await readFile(me, myRepoName(), path);
     return d ?? fallback;
   } catch (e) { return fallback; }
 }
-// Запис файлу у СВОЄ репо через GitHub Contents API (merge по sha, retry 409)
 async function writeMyFile(path, data) {
   const url = `/repos/${me}/${myRepoName()}/contents/${path}`;
   const getR = await gh(url);
@@ -142,7 +241,7 @@ async function writeMyFile(path, data) {
   return false;
 }
 
-// ================= ПОШУК УЧАСНИКІВ (topic:spilnota) =================
+// ================= ПОШУК УЧАСНИКІВ =================
 async function searchParticipants(force) {
   if (!force && Date.now() - lastSearch < CONFIG.searchMs && participants.length) return participants;
   try {
@@ -154,22 +253,21 @@ async function searchParticipants(force) {
         .map(it => ({ login: it.owner.login, repo: it.name }));
       lastSearch = Date.now();
     }
-  } catch (e) { /* офлайн — лишаємо старий список */ }
+  } catch (e) { }
   return participants;
 }
 
-// ================= СТРІЧКА (агрегація браузером) =================
+// ================= СТРІЧКА =================
 async function refreshWall() {
   const list = await searchParticipants();
   const posts = [];
   for (const p of list) {
-    if (p.login === me) continue; // своє читаємо з кешу нижче
+    if (p.login === me) continue;
     try {
       const w = await readFile(p.login, p.repo, 'data/wall.json');
       if (w && Array.isArray(w.posts)) posts.push(...w.posts.map(x => ({ ...x, repoOwner: p.login })));
-    } catch (e) { /* репо без даних */ }
+    } catch (e) { }
   }
-  // свої пости
   const myW = await readMyFile('data/wall.json', { posts: [] });
   if (myW && Array.isArray(myW.posts)) posts.push(...myW.posts.map(x => ({ ...x, repoOwner: me })));
   wallCache.posts = posts.sort((a, b) => b.ts - a.ts);
@@ -196,8 +294,6 @@ async function refreshComments() {
   }
   commentsCache = comments;
 }
-
-// ================= ПРОФІЛІ =================
 async function profileOf(login) {
   if (login === me) return myProfile;
   try {
@@ -210,29 +306,22 @@ async function loadMyProfile() {
   if (!myProfile) myProfile = { name: me, emoji: '🦊', status: '', city: '', about: '', joined: Date.now() };
 }
 
-// ================= ДІАЛОГИ (outbox-схема, як пошта) =================
+// ================= ДІАЛОГИ =================
 async function refreshDialogs() {
   const list = await searchParticipants();
   dialogsCache = {};
-  // мої вихідні (у моєму репо)
   for (const p of list) {
     if (p.login === me) continue;
     const msgs = await readMyFile('data/outbox/' + p.login + '.json', []);
-    if (Array.isArray(msgs) && msgs.length) {
-      dialogsCache[p.login] = [...(dialogsCache[p.login] || []), ...msgs];
-    }
+    if (Array.isArray(msgs) && msgs.length) dialogsCache[p.login] = [...(dialogsCache[p.login] || []), ...msgs];
   }
-  // вхідні: читаємо outbox/<me>.json у кожного учасника
   for (const p of list) {
     if (p.login === me) continue;
     try {
       const msgs = await readFile(p.login, p.repo, 'data/outbox/' + me + '.json');
-      if (Array.isArray(msgs) && msgs.length) {
-        dialogsCache[p.login] = [...(dialogsCache[p.login] || []), ...msgs];
-      }
+      if (Array.isArray(msgs) && msgs.length) dialogsCache[p.login] = [...(dialogsCache[p.login] || []), ...msgs];
     } catch (e) { }
   }
-  // сортуємо кожен діалог по часу
   for (const k in dialogsCache) dialogsCache[k].sort((a, b) => a.ts - b.ts);
 }
 async function sendMessage(peer, text) {
@@ -241,9 +330,7 @@ async function sendMessage(peer, text) {
   const msg = { id: uid(), from: me, to: peer, text: text, ts: Date.now() };
   msgs.push(msg);
   const ok = await writeMyFile(path, msgs.slice(-500));
-  if (ok) {
-    dialogsCache[peer] = [...(dialogsCache[peer] || []), msg].sort((a, b) => a.ts - b.ts);
-  }
+  if (ok) dialogsCache[peer] = [...(dialogsCache[peer] || []), msg].sort((a, b) => a.ts - b.ts);
   return ok;
 }
 function readTs(peer) { return +(localStorage.getItem(LS_READ + peer) || 0); }
@@ -258,36 +345,49 @@ function unreadCount() {
   return n;
 }
 
-const CONTENT = () => $('content');
+// ================= РОУТЕР =================
 function parseHash() {
   let h = location.hash.replace(/^#\/?/, '') || 'me';
   const parts = h.split('/');
   return { screen: parts[0] || 'me', param: decodeURIComponent(parts[1] || '') };
 }
 function go(url) { location.hash = url; }
+function moduleOfScreen(screen) {
+  return MODULE_DEFS.find(m => m.screens.includes(screen));
+}
+function firstEnabledScreen() {
+  const m = MODULE_DEFS.find(x => moduleEnabled(x.id));
+  return m ? m.screens[0] : 'settings';
+}
 
 // ================= РЕНДЕР =================
-function renderHeader() {
-  const hu = $('header-user');
-  if (me) {
-    hu.innerHTML = avatarHtml(me, myProfile.emoji, 'sm') +
-      `<span class="hu-name" onclick="go('me')">${esc(myProfile.name || me)}</span>`;
-  } else hu.innerHTML = '';
-  const mf = $('menu-foot');
-  if (me) mf.innerHTML = `Ви увійшли як <b>${esc(me)}</b><br><a href="javascript:void(0)" onclick="logout()" style="font-size:11px">Вийти</a>`;
-}
+const CONTENT = () => $('content');
 function renderNav() {
   const { screen } = parseHash();
+  const cfg = getCfg();
+  // ліве меню
+  const menu = $('sidebar').querySelector('.menu');
+  menu.innerHTML = MODULE_DEFS
+    .filter(m => moduleEnabled(m.id))
+    .map(m => {
+      const counter = m.id === 'chat' && unreadCount() ? `<span class="counter">${unreadCount()}</span>` : '';
+      return `<li><a href="#/${m.screens[0]}" data-nav="${m.id}" class="${m.screens.includes(screen) ? 'active' : ''}"><span class="mi">${m.icon}</span> ${m.name}${counter}</a></li>`;
+    }).join('');
+  // нижня навігація
+  const bn = $('bottom-nav');
+  bn.innerHTML = MODULE_DEFS
+    .filter(m => moduleEnabled(m.id))
+    .map(m => `<a href="#/${m.screens[0]}" data-nav="${m.id}" class="${m.screens.includes(screen) ? 'active' : ''}">${m.icon}<br><small>${m.name.replace(/ \(.*/, '')}</small></a>`)
+    .join('');
   document.querySelectorAll('[data-nav]').forEach(el => {
-    el.classList.toggle('active', el.dataset.nav === screen);
+    el.classList.toggle('active', el.dataset.nav === moduleOfScreen(screen)?.id);
   });
-  const n = unreadCount();
-  const cnt = $('msg-counter');
-  cnt.textContent = n > 0 ? String(n) : '';
 }
 function renderScreen() {
   const { screen, param } = parseHash();
   if (!me) { renderAuthGate(); return; }
+  const mod = moduleOfScreen(screen);
+  if (!mod || !moduleEnabled(mod.id)) { go(firstEnabledScreen()); return; }
   switch (screen) {
     case 'me': renderMyPage(); break;
     case 'feed': renderFeed(); break;
@@ -295,6 +395,7 @@ function renderScreen() {
     case 'dialog': renderDialog(param); break;
     case 'people': renderPeople(); break;
     case 'user': renderUserPage(param); break;
+    case 'settings': renderSettings(); break;
     default: renderMyPage();
   }
   renderNav();
@@ -317,10 +418,12 @@ function renderMyPage() {
           <div class="profile-dt"><b>Мій репозиторій:</b> <a href="https://github.com/${esc(me)}/${esc(myRepoName())}" target="_blank">${esc(myRepoName())} ↗</a></div>
           <div class="btn-row">
             <button class="btn gray" onclick="go('edit')">✏ Редагувати</button>
+            <button class="btn gray" onclick="go('settings')">⚙️ Налаштування</button>
           </div>
         </div>
       </div>
     </div>
+    ${moduleEnabled('wall') ? `
     <div class="card">
       <div class="card-title">Моя стіна</div>
       <div class="quick-post">
@@ -329,7 +432,7 @@ function renderMyPage() {
         <button class="btn" onclick="submitPost()">Написати</button>
       </div>
       ${renderPostList(myPosts)}
-    </div>`;
+    </div>` : ''}`;
 }
 
 // ---- Стрічка ----
@@ -346,7 +449,6 @@ function renderFeed() {
     </div>
     ${renderPostList(posts)}`;
 }
-
 function renderPostList(posts) {
   if (!posts.length) return `<div class="empty">Поки що тут порожньо. Напишіть перший пост!</div>`;
   return posts.map(postHtml).join('');
@@ -415,7 +517,7 @@ function renderPeople() {
 // ---- Профіль іншого користувача ----
 function renderUserPage(nick) {
   const posts = wallCache.posts.filter(x => x.repoOwner === nick).sort((a, b) => b.ts - a.ts);
-  const canMsg = me && me !== nick;
+  const canMsg = me && me !== nick && moduleEnabled('chat');
   CONTENT().innerHTML = `
     <div class="card">
       <div class="profile-head">
@@ -427,10 +529,11 @@ function renderUserPage(nick) {
         </div>
       </div>
     </div>
+    ${moduleEnabled('wall') ? `
     <div class="card">
       <div class="card-title">Стіна ${esc(nick)}</div>
       ${renderPostList(posts)}
-    </div>`;
+    </div>` : ''}`;
 }
 
 // ---- Редагування профілю ----
@@ -462,7 +565,7 @@ function renderEdit() {
 }
 let editEmoji = null;
 
-// ---- Повідомлення (список діалогів) ----
+// ---- Повідомлення ----
 function renderMessages() {
   const peers = Object.keys(dialogsCache)
     .filter(k => dialogsCache[k] && dialogsCache[k].length)
@@ -532,6 +635,96 @@ function renderDialog(peer) {
   if (inp) { inp.focus(); inp.onkeydown = e => { if (e.key === 'Enter') submitMsg(encodeURIComponent(peer)); }; }
 }
 
+// ---- Налаштування ----
+function renderSettings() {
+  const cfg = getCfg();
+  CONTENT().innerHTML = `
+    <div class="card">
+      <div class="card-title">Налаштування</div>
+
+      <div class="set-group">
+        <div class="set-group-title">Модулі</div>
+        ${MODULE_DEFS.map(m => `
+          <div class="set-row">
+            <div class="set-info">
+              <div class="set-name">${m.icon} ${m.name}</div>
+              <div class="set-desc">${m.desc}</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" ${cfg.enabled[m.id] !== false ? 'checked' : ''} ${m.locked ? 'disabled' : ''} onchange="toggleModule('${m.id}', this.checked)">
+              <span class="slider"></span>
+            </label>
+          </div>`).join('')}
+        <div class="set-desc" style="margin-top:6px">Нові модулі з'являтимуться тут автоматично.</div>
+      </div>
+
+      <div class="set-group">
+        <div class="set-group-title">Шрифт</div>
+        <div class="font-options">
+          ${Object.entries(FONTS).map(([id, f]) => `
+            <div class="font-option ${cfg.font === id ? 'sel' : ''}" onclick="setFont('${id}')" style="font-family:${f.family}">
+              ${f.name}<small>Аа Бб 123</small>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="set-group">
+        <div class="set-group-title">Кольори (тема)</div>
+        <div class="theme-options">
+          ${Object.entries(THEMES).map(([id, t]) => `
+            <div class="theme-option ${cfg.theme === id ? 'sel' : ''}" onclick="setTheme('${id}')">
+              <div class="theme-swatch">
+                <i style="background:${t.css['--header-bottom']}"></i>
+                <i style="background:${t.css['--bg']}"></i>
+                <i style="background:${t.css['--card']}"></i>
+                <i style="background:${t.css['--btn-bottom']}"></i>
+              </div>
+              <small>${t.name}</small>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="set-group">
+        <div class="set-group-title">Акаунт</div>
+        <div class="set-row">
+          <div class="set-info">
+            <div class="set-name">${esc(me)}</div>
+            <div class="set-desc">GitHub-логін · репо ${esc(myRepoName())}</div>
+          </div>
+          <button class="btn gray" onclick="logout()">Вийти</button>
+        </div>
+      </div>
+    </div>`;
+}
+function toggleModule(id, on) {
+  const cfg = getCfg();
+  cfg.enabled[id] = on;
+  saveCfg(cfg);
+  if (!on) {
+    // якщо вимкнули поточний екран — перейти на перший доступний
+    const { screen } = parseHash();
+    const mod = moduleOfScreen(screen);
+    if (mod && mod.id === id) go(firstEnabledScreen());
+  }
+  renderNav();
+  renderScreen();
+  toast(on ? '✅ Модуль увімкнено' : '⏻ Модуль вимкнено');
+}
+function setFont(id) {
+  const cfg = getCfg();
+  cfg.font = id;
+  saveCfg(cfg);
+  applyFont(id);
+  renderSettings();
+}
+function setTheme(id) {
+  const cfg = getCfg();
+  cfg.theme = id;
+  saveCfg(cfg);
+  applyTheme(id);
+  renderSettings();
+}
+
 // ---- Гейт ----
 function renderAuthGate() {
   CONTENT().innerHTML = `<div class="card"><div class="empty">Будь ласка, увійдіть до Спільноти.</div></div>`;
@@ -543,26 +736,23 @@ let socialTimer = null;
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
-    const { screen, param } = parseHash();
+    const { screen } = parseHash();
     if (!me) return;
+    const mod = moduleOfScreen(screen);
+    if (!mod || !moduleEnabled(mod.id)) return;
     try {
       await searchParticipants();
-      if (screen === 'me' || screen === 'feed' || screen === 'user') {
-        await refreshWall();
-      } else if (screen === 'messages') {
-        await refreshDialogs();
-      } else if (screen === 'dialog') {
-        await refreshDialogs();
-      }
-      const sig = screen + '|' + wallCache.posts.map(p => p.id + (p.likes||0)).join(',') + '|' + JSON.stringify(dialogsCache).length;
+      if (mod.poll === 'wall' || screen === 'me' || screen === 'user') await refreshWall();
+      if (mod.poll === 'dialogs' || screen === 'messages') await refreshDialogs();
+      const sig = screen + '|' + wallCache.posts.length + '|' + Object.keys(dialogsCache).length + '|' + unreadCount();
       if (sig !== lastRenderSig) { lastRenderSig = sig; renderScreen(); }
       else renderNav();
-    } catch (e) { /* офлайн */ }
+    } catch (e) { }
   }, CONFIG.pollMs);
-  // лайки/коментарі — рідше (кожні 15с)
   if (socialTimer) clearInterval(socialTimer);
   socialTimer = setInterval(async () => {
     if (!me) return;
+    if (!moduleEnabled('wall')) return;
     try {
       await refreshLikes();
       await refreshComments();
@@ -679,7 +869,6 @@ async function tryLogin() {
   $('reg-btn').disabled = true;
   $('reg-err').textContent = '';
   try {
-    // перевіряємо токен: хто ми?
     const r = await fetch(API + '/user', { headers: { Authorization: 'Bearer ' + raw, Accept: 'application/vnd.github.v3+json' } });
     if (!r.ok) {
       $('reg-btn').disabled = false;
@@ -689,7 +878,6 @@ async function tryLogin() {
     const user = await r.json();
     token = raw;
     me = user.login;
-    // створюємо репо, якщо немає
     const repoName = CONFIG.repoPrefix + me;
     const exists = await ghJson(`/repos/${me}/${repoName}`);
     if (!exists) {
@@ -704,15 +892,13 @@ async function tryLogin() {
         return;
       }
     }
-    // додаємо мітку spilnota
     try {
       await gh(`/repos/${me}/${repoName}/topics`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Accept: 'application/vnd.github.mercy-preview+json' },
         body: JSON.stringify({ names: [CONFIG.topic] })
       });
-    } catch (e) { /* topic може не створитись — не критично */ }
-    // seed-файли, якщо новий користувач (profile.json ще не існує)
+    } catch (e) { }
     const existingProfile = await readFile(me, repoName, 'data/profile.json');
     if (!existingProfile) {
       myProfile = { name: user.name || user.login, emoji: regEmoji, status: '', city: '', about: '', joined: Date.now() };
@@ -725,7 +911,6 @@ async function tryLogin() {
     }
     localStorage.setItem(LS_TOKEN, token);
     localStorage.setItem(LS_LOGIN, me);
-    // крок 2: вибір аватара
     $('reg-title').textContent = 'Майже готово!';
     $('reg-sub').innerHTML = 'Оберіть аватар для вашої сторінки';
     $('reg-step1').classList.add('hidden');
@@ -738,9 +923,8 @@ async function tryLogin() {
   }
 }
 async function finishRegistration() {
-  // зберегти вибраний аватар у профіль
   myProfile = { ...myProfile, emoji: regEmoji };
-  try { await writeMyFile('data/profile.json', myProfile); } catch (e) { /* не критично */ }
+  try { await writeMyFile('data/profile.json', myProfile); } catch (e) { }
   $('reg-mask').classList.add('hidden');
   renderHeader();
   await refreshAll();
@@ -754,16 +938,25 @@ async function refreshAll() {
   await searchParticipants(true);
   await Promise.all([refreshWall(), refreshLikes(), refreshComments(), refreshDialogs(), loadMyProfile()]);
 }
+function renderHeader() {
+  const hu = $('header-user');
+  if (me) {
+    hu.innerHTML = avatarHtml(me, myProfile.emoji, 'sm') +
+      `<span class="hu-name" onclick="go('me')">${esc(myProfile.name || me)}</span>`;
+  } else hu.innerHTML = '';
+  const mf = $('menu-foot');
+  if (me) mf.innerHTML = `Ви увійшли як <b>${esc(me)}</b><br><a href="javascript:void(0)" onclick="logout()" style="font-size:11px">Вийти</a>`;
+}
 async function init() {
+  applyCfg();
   buildEmojiGrid();
   token = localStorage.getItem(LS_TOKEN);
   me = localStorage.getItem(LS_LOGIN);
   if (me && token) {
-    // перевірка токена (м'яка)
     try {
       const r = await fetch(API + '/user', { headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github.v3+json' } });
       if (!r.ok) { token = null; me = null; localStorage.removeItem(LS_TOKEN); localStorage.removeItem(LS_LOGIN); }
-    } catch (e) { /* офлайн — лишаємо сесію */ }
+    } catch (e) { }
   }
   if (!me || !token) {
     openTokenStep();
@@ -779,6 +972,8 @@ async function init() {
   window.addEventListener('hashchange', () => {
     if (!me) return;
     const { screen } = parseHash();
+    const mod = moduleOfScreen(screen);
+    if (!mod || !moduleEnabled(mod.id)) { go(firstEnabledScreen()); return; }
     if (screen === 'dialog') { refreshDialogs().then(() => renderScreen()); }
     else renderScreen();
   });
