@@ -1,8 +1,6 @@
 /* ============================================================
-   Спільнота — суспільна мережа в стилі ВК 2013
+   Спільнота — суспільна мережа в стилі класичних соцмереж
    Децентралізована: у кожного СВІЙ репо spilnota-<нік>.
-   МОДУЛЬНА СИСТЕМА: профіль/стіна/чат/люди/налаштування —
-   вмикаються і вимикаються в налаштуваннях.
    ============================================================ */
 
 // ================= КОНФІГ =================
@@ -31,8 +29,8 @@ const API = 'https://api.github.com';
 
 // ================= ТЕМИ ТА ШРИФТИ =================
 const THEMES = {
-  vk2013: {
-    name: 'ВК 2013',
+  classic: {
+    name: 'Класична',
     css: {
       '--header-top': '#5E81A8', '--header-bottom': '#45688E', '--header-border': '#3A5B7C',
       '--bg': '#EDEEF0', '--card': '#FFFFFF', '--border': '#D8DFEA',
@@ -124,7 +122,7 @@ const EMOJIS = ['🦊','🐱','🐶','🐻','🐼','🦁','🐸','🐵','🐨','
 function defaultCfg() {
   const enabled = {};
   for (const m of MODULE_DEFS) enabled[m.id] = m.def;
-  return { enabled, font: 'ptsans', theme: 'vk2013' };
+  return { enabled, font: 'ptsans', theme: 'classic' };
 }
 function getCfg() {
   try { return { ...defaultCfg(), ...JSON.parse(localStorage.getItem(LS_CFG) || '{}') }; }
@@ -140,7 +138,7 @@ function moduleEnabled(id) {
   return cfg.enabled[id] !== false;
 }
 function applyTheme(themeId) {
-  const t = THEMES[themeId] || THEMES.vk2013;
+  const t = THEMES[themeId] || THEMES.classic;
   const root = document.documentElement;
   for (const [k, v] of Object.entries(t.css)) root.style.setProperty(k, v);
 }
@@ -1221,7 +1219,7 @@ function renderEdit() {
       <div class="emoji-grid">${EMOJIS.map(e => `<div class="em ${e === p.emoji ? 'sel' : ''}" data-em="${e}" onclick="pickEditEmoji('${e}', this)">${e}</div>`).join('')}</div>
       <div style="height:8px"></div>
       <label>Статус</label>
-      <input class="input" id="e-status" maxlength="120" value="${esc(p.status || '')}" placeholder="Статус (як у ВК)">
+      <input class="input" id="e-status" maxlength="120" value="${esc(p.status || '')}" placeholder="Статус">
       <div style="height:8px"></div>
       <label>Місто</label>
       <input class="input" id="e-city" maxlength="60" value="${esc(p.city || '')}" placeholder="Місто">
