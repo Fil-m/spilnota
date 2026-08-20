@@ -524,25 +524,26 @@ function matchVimeo(url) {
 }
 function embedBlock(url) {
   const clean = url.replace(/[),.;!?]+$/, '');
+  const href = /^https?:/.test(clean) ? clean : 'https://' + clean;
   const yt = matchYouTube(clean);
   if (yt) {
-    return `<a href="${esc(clean)}" target="_blank">${esc(clean)}</a>
+    return `<a href="${esc(href)}" target="_blank">${esc(clean)}</a>
       <div class="embed-wrap"><iframe src="https://www.youtube-nocookie.com/embed/${yt}" title="YouTube" loading="lazy" allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
   }
   const tt = matchTikTok(clean);
   if (tt) {
-    return `<a href="${esc(clean)}" target="_blank">${esc(clean)}</a>
+    return `<a href="${esc(href)}" target="_blank">${esc(clean)}</a>
       <div class="embed-wrap"><iframe src="https://www.tiktok.com/embed/v2/${tt}" title="TikTok" loading="lazy" allowfullscreen></iframe></div>`;
   }
   const vm = matchVimeo(clean);
   if (vm) {
-    return `<a href="${esc(clean)}" target="_blank">${esc(clean)}</a>
+    return `<a href="${esc(href)}" target="_blank">${esc(clean)}</a>
       <div class="embed-wrap"><iframe src="https://player.vimeo.com/video/${vm}" title="Vimeo" loading="lazy" allowfullscreen></iframe></div>`;
   }
-  return `<a href="${esc(clean)}" target="_blank">${esc(clean)}</a>`;
+  return `<a href="${esc(href)}" target="_blank">${esc(clean)}</a>`;
 }
 function renderPostText(text) {
-  const re = /(https?:\/\/[^\s<>"']+)/g;
+  const re = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/g;
   const parts = [];
   let last = 0, m;
   while ((m = re.exec(text))) {
@@ -574,7 +575,7 @@ function postHtml(post) {
     </div>
     ${comments.length ? `<div class="comments">${comments.map(c => `
       <div class="comment">${avatarHtml(c.author, '🙂', 'xs')}
-        <div class="c-body"><span class="c-author">${esc(c.author)}</span> ${esc(c.text)}
+        <div class="c-body"><span class="c-author">${esc(c.author)}</span> <span class="c-text">${renderPostText(c.text)}</span>
         <div class="c-time">${timeAgo(c.ts)}</div></div></div>`).join('')}</div>` : ''}
     <div class="comments hidden" id="cmt-${owner}-${post.id}">
       <div class="comment-input">
