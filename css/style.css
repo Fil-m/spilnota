@@ -340,6 +340,20 @@ a:hover { text-decoration: underline; }
   opacity: 0.55; transition: opacity 0.2s;
 }
 .proj-eye:hover { opacity: 1; background: var(--comment-bg); }
+.proj-arrows { flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
+.proj-arrow {
+  background: none; border: 1px solid var(--border);
+  border-radius: 2px; font-size: 9px; line-height: 1; padding: 4px 7px;
+  cursor: pointer; color: var(--link);
+}
+.proj-arrow:hover { background: var(--mine-bubble); }
+.proj-arrow:disabled { opacity: 0.3; cursor: default; }
+.proj-sort-hint {
+  font-size: 11px; color: var(--btn-bottom); font-weight: 700;
+  margin: -4px 0 8px; padding: 4px 8px;
+  background: var(--mine-bubble); border: 1px dashed var(--btn-border);
+  border-radius: 2px;
+}
 
 /* ---------- Мобільна версія ---------- */
 .bottom-nav {

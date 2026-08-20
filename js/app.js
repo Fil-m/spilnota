@@ -18,6 +18,8 @@ const LS_READ = 'spilnota_read_';
 const LS_CFG = 'spilnota_cfg';
 const LS_HIDDEN = 'spilnota_hidden';
 const LS_PROJ_FILTER = 'spilnota_proj_filter';
+const LS_PROJ_ORDER = 'spilnota_proj_order';
+let projSortMode = false;
 const API = 'https://api.github.com';
 
 // ================= ТЕМИ ТА ШРИФТИ =================
@@ -573,6 +575,7 @@ function saveProjFilter(f) { localStorage.setItem(LS_PROJ_FILTER, JSON.stringify
 function projFiltered() {
   const f = projFilterState();
   const hidden = hiddenProjects();
+  const order = projOrder();
   const hiddenList = (projectsCache || []).filter(p => hidden.includes(p.name));
   let list = (projectsCache || []).filter(p => !hidden.includes(p.name));
   if (f.kind === 'page') list = list.filter(p => p.page);
@@ -585,8 +588,44 @@ function projFiltered() {
   if (f.sort === 'stars') list = [...list].sort((a, b) => b.stars - a.stars);
   else if (f.sort === 'name') list = [...list].sort((a, b) => a.name.localeCompare(b.name));
   else list = [...list].sort((a, b) => b.updated - a.updated);
+  // ручний порядок: спершу впорядковані юзером, решта — за сортуванням
+  if (order.length) {
+    const ordered = [];
+    const rest = [];
+    for (const p of list) (order.includes(p.name) ? ordered : rest).push(p);
+    ordered.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+    list = [...ordered, ...rest];
+  }
   const langs = [...new Set((projectsCache || []).map(p => p.lang).filter(Boolean))].sort();
   return { f, list, hiddenList, langs };
+}
+function projOrder() { try { return JSON.parse(localStorage.getItem(LS_PROJ_ORDER) || '[]'); } catch (e) { return []; } }
+function saveProjOrder(list) { localStorage.setItem(LS_PROJ_ORDER, JSON.stringify(list)); }
+function toggleProjSortMode() {
+  projSortMode = !projSortMode;
+  renderProjects();
+  toast(projSortMode ? '↕ Режим упорядкування увімкнено — міняйте місця стрілками' : '↕ Режим упорядкування вимкнено');
+}
+function moveProject(name, dir) {
+  const visible = projFiltered().list.map(p => p.name);
+  const order = projOrder();
+  const full = [...new Set([...order, ...visible])];
+  const i = full.indexOf(name);
+  // знайти наступного/попереднього ВИДИМОГО сусіда
+  let target = null;
+  for (let k = i + dir; k >= 0 && k < full.length; k += dir) {
+    if (visible.includes(full[k])) { target = full[k]; break; }
+  }
+  if (!target) return; // нема куди рухатись
+  const next = full.filter(n => n !== name);
+  next.splice(next.indexOf(target) + (dir > 0 ? 1 : 0), 0, name);
+  saveProjOrder(next);
+  renderProjects();
+}
+function resetProjOrder() {
+  saveProjOrder([]);
+  renderProjects();
+  toast('↕ Порядок скинуто');
 }
 function fmtProjTime(ts) {
   if (!ts) return '—';
@@ -596,6 +635,11 @@ function fmtProjTime(ts) {
   return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
 }
 function projectCard(p) {
+  const arrows = projSortMode ? `
+    <div class="proj-arrows">
+      <button class="proj-arrow" title="Вище" onclick="moveProject('${esc(p.name)}',-1)">▲</button>
+      <button class="proj-arrow" title="Нижче" onclick="moveProject('${esc(p.name)}',1)">▼</button>
+    </div>` : '';
   return `
   <div class="proj">
     <div class="proj-icon">${projectLangIcon(p.lang)}</div>
@@ -615,6 +659,7 @@ function projectCard(p) {
         ${p.page ? `<a class="proj-page" href="${esc(p.page)}" target="_blank">🌐 Сторінка ↗</a>` : ''}
       </div>
     </div>
+    ${arrows}
     <button class="proj-eye" title="Приховати / показати" onclick="toggleProjectHidden('${esc(p.name)}')">👁</button>
   </div>`;
 }
@@ -662,8 +707,11 @@ function renderProjects() {
           <option value="stars" ${f.sort === 'stars' ? 'selected' : ''}>За зірками</option>
           <option value="name" ${f.sort === 'name' ? 'selected' : ''}>За ім'ям</option>
         </select>
+        <button class="btn ${projSortMode ? '' : 'gray'}" onclick="toggleProjSortMode()">${projSortMode ? '✓ Готово' : '↕ Порядок'}</button>
+        ${projSortMode ? '<button class="btn gray" onclick="resetProjOrder()">Скинути</button>' : ''}
         <button class="btn gray" onclick="refreshProjects()">⟳ Оновити</button>
       </div>
+      ${projSortMode ? '<div class="proj-sort-hint">▲▼ міняйте проекти місцями — порядок збережеться. Сортування в цьому режимі не діє.</div>' : ''}
       <div id="proj-list">${list.length ? list.map(projectCard).join('') : '<div class="empty">Нічого не знайдено за цими фільтрами.</div>'}</div>
     </div>
     ${hiddenList.length ? `
