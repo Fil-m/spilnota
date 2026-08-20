@@ -395,6 +395,9 @@ function firstEnabledScreen() {
 
 // ================= РЕНДЕР =================
 const CONTENT = () => $('content');
+function currentSig(screen) {
+  return screen + '|' + wallCache.posts.length + '|' + Object.keys(dialogsCache).length + '|' + unreadCount();
+}
 function renderNav() {
   const { screen } = parseHash();
   const cfg = getCfg();
@@ -423,6 +426,7 @@ function renderScreen() {
   if (!mod || !moduleEnabled(mod.id)) { go(firstEnabledScreen()); return; }
   switch (screen) {
     case 'me': renderMyPage(); break;
+    case 'edit': renderEdit(); break;
     case 'feed': renderFeed(); break;
     case 'messages': renderMessages(); break;
     case 'dialog': renderDialog(param); break;
@@ -436,6 +440,8 @@ function renderScreen() {
   }
   renderNav();
   drawAvatars();
+  // синхронізуємо лічильник: поллінг не перерендерить екран, поки дані не зміняться
+  lastRenderSig = currentSig(screen);
 }
 
 // ---- Сторінка користувача (моя) ----
@@ -1410,7 +1416,7 @@ function startPolling() {
       await searchParticipants();
       if (mod.poll === 'wall' || screen === 'me' || screen === 'user') await refreshWall();
       if (mod.poll === 'dialogs' || screen === 'messages') await refreshDialogs();
-      const sig = screen + '|' + wallCache.posts.length + '|' + Object.keys(dialogsCache).length + '|' + unreadCount();
+      const sig = currentSig(screen);
       if (sig !== lastRenderSig) { lastRenderSig = sig; renderScreen(); }
       else renderNav();
     } catch (e) { }
