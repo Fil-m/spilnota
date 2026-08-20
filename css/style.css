@@ -304,6 +304,43 @@ a:hover { text-decoration: underline; }
 .theme-swatch i { width: 16px; height: 16px; border-radius: 2px; display: inline-block; }
 .theme-option small { font-size: 10px; color: var(--text2); display: block; }
 
+/* ---------- Мої проекти ---------- */
+.proj-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.proj-filters .proj-search { flex: 1; min-width: 160px; }
+.proj-filters .proj-sel { width: auto; flex-shrink: 0; cursor: pointer; }
+.proj {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.proj:last-child { border-bottom: none; }
+.proj-icon { font-size: 26px; flex-shrink: 0; line-height: 1.2; }
+.proj-body { flex: 1; min-width: 0; }
+.proj-name { font-size: 14px; font-weight: 700; word-wrap: break-word; }
+.proj-name a { color: var(--link); }
+.proj-badge {
+  display: inline-block; font-size: 10px; font-weight: 400;
+  padding: 1px 6px; border-radius: 2px; margin-left: 4px;
+  vertical-align: middle;
+}
+.proj-badge.priv { background: #FFF4E0; color: #8A5A00; border: 1px solid #E8C87A; }
+.proj-badge.arch { background: #EDEDED; color: #666; border: 1px solid #CCC; }
+.proj-badge.fork { background: #E8F0FF; color: #2B587A; border: 1px solid #B9CDE3; }
+.proj-desc { font-size: 12px; color: var(--text2); margin-top: 2px; word-wrap: break-word; }
+.proj-nodesc { color: var(--text3); font-style: italic; }
+.proj-meta {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  font-size: 11px; color: var(--text3); margin-top: 4px;
+}
+.proj-lang { display: inline-flex; align-items: center; gap: 4px; }
+.proj-lang i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.proj-page { color: var(--green); font-weight: 700; }
+.proj-eye {
+  flex-shrink: 0; background: none; border: 1px solid var(--border);
+  border-radius: 2px; font-size: 14px; cursor: pointer; padding: 4px 6px;
+  opacity: 0.55; transition: opacity 0.2s;
+}
+.proj-eye:hover { opacity: 1; background: var(--comment-bg); }
+
 /* ---------- Мобільна версія ---------- */
 .bottom-nav {
   display: none;
