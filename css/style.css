@@ -355,6 +355,38 @@ a:hover { text-decoration: underline; }
   border-radius: 2px;
 }
 
+/* ---------- Сторінки (навігатор) ---------- */
+.pg-create { display: flex; gap: 6px; margin-bottom: 8px; }
+.pg-create .pg-new-cat { flex: 1; }
+.pg-tools { display: flex; gap: 6px; margin-bottom: 10px; }
+.pg-cat { margin-bottom: 12px; }
+.pg-cat-head {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  background: var(--comment-bg); border: 1px solid var(--border);
+  padding: 6px 8px; margin-bottom: 6px;
+}
+.pg-cat-name { font-weight: 700; font-size: 13px; cursor: pointer; }
+.pg-cat-name:hover { text-decoration: underline; color: var(--link); }
+.pg-cat-count { color: var(--text3); font-size: 11px; }
+.pg-cat-arrows { display: inline-flex; gap: 2px; }
+.pg-cat-actions { margin-left: auto; display: inline-flex; gap: 4px; }
+.btn.pg-mini { padding: 2px 8px; font-size: 12px; }
+.pg-empty { color: var(--text3); font-size: 11px; font-style: italic; padding: 6px 4px; }
+.pg-cat-menu {
+  margin-top: 6px; padding: 6px 8px;
+  background: var(--comment-bg); border: 1px dashed var(--border);
+  border-radius: 2px;
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
+}
+.pg-cat-check {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--text2); cursor: pointer;
+}
+.pg-cat-check input { cursor: pointer; }
+.pg-card { border-bottom: none; }
+.pg-card + .pg-card { border-top: 1px solid var(--border); border-bottom: none; }
+.pg-card:last-child { border-bottom: none; }
+
 /* ---------- Мобільна версія ---------- */
 .bottom-nav {
   display: none;
