@@ -509,6 +509,50 @@ function postLikes(post) {
 function postComments(post) {
   return commentsCache.filter(c => c.postOwner === post.repoOwner && c.postId === post.id).sort((a, b) => a.ts - b.ts);
 }
+// ---- Вбудовування відео з посилань у тексті поста ----
+function matchYouTube(url) {
+  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{6,})/);
+  return m ? m[1] : null;
+}
+function matchTikTok(url) {
+  const m = url.match(/tiktok\.com\/@[\w.-]+\/video\/(\d{9,})/);
+  return m ? m[1] : null;
+}
+function matchVimeo(url) {
+  const m = url.match(/vimeo\.com\/(\d{6,})/);
+  return m ? m[1] : null;
+}
+function embedBlock(url) {
+  const clean = url.replace(/[),.;!?]+$/, '');
+  const yt = matchYouTube(clean);
+  if (yt) {
+    return `<a href="${esc(clean)}" target="_blank">${esc(clean)}</a>
+      <div class="embed-wrap"><iframe src="https://www.youtube-nocookie.com/embed/${yt}" title="YouTube" loading="lazy" allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+  }
+  const tt = matchTikTok(clean);
+  if (tt) {
+    return `<a href="${esc(clean)}" target="_blank">${esc(clean)}</a>
+      <div class="embed-wrap"><iframe src="https://www.tiktok.com/embed/v2/${tt}" title="TikTok" loading="lazy" allowfullscreen></iframe></div>`;
+  }
+  const vm = matchVimeo(clean);
+  if (vm) {
+    return `<a href="${esc(clean)}" target="_blank">${esc(clean)}</a>
+      <div class="embed-wrap"><iframe src="https://player.vimeo.com/video/${vm}" title="Vimeo" loading="lazy" allowfullscreen></iframe></div>`;
+  }
+  return `<a href="${esc(clean)}" target="_blank">${esc(clean)}</a>`;
+}
+function renderPostText(text) {
+  const re = /(https?:\/\/[^\s<>"']+)/g;
+  const parts = [];
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    parts.push(esc(text.slice(last, m.index)));
+    parts.push(embedBlock(m[1]));
+    last = m.index + m[0].length;
+  }
+  parts.push(esc(text.slice(last)));
+  return parts.join('');
+}
 function postHtml(post) {
   const owner = post.repoOwner;
   const liked = likesCache.some(l => l.postOwner === owner && l.postId === post.id && l.liker === me);
@@ -521,7 +565,7 @@ function postHtml(post) {
       <div class="post-info">
         <div><a class="post-author" href="#/user/${encodeURIComponent(owner)}">${esc(owner)}</a>
         <span class="post-time"> · ${timeAgo(post.ts)}</span></div>
-        <div class="post-text">${esc(post.text)}</div>
+        <div class="post-text">${renderPostText(post.text)}</div>
       </div>
     </div>
     <div class="post-actions">
