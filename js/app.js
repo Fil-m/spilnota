@@ -240,8 +240,11 @@ async function readFile(owner, repo, path) {
 }
 async function readMyFile(path, fallback) {
   try {
-    const d = await readFile(me, myRepoName(), path);
-    return d ?? fallback;
+    // Свій файл — через Contents API з токеном: raw.githubusercontent.com — CDN з кешем,
+    // після PUT може віддавати СТАРУ версію (свої щойно відправлені повідомлення зникали)
+    const d = await ghJson('/repos/' + me + '/' + myRepoName() + '/contents/' + path);
+    if (d && d.content) return JSON.parse(fromBase64(d.content.replace(/\n/g, '')));
+    return fallback;
   } catch (e) { return fallback; }
 }
 async function writeMyFile(path, data) {
@@ -296,7 +299,10 @@ async function refreshWall() {
   }
   const myW = await readMyFile('data/wall.json', { posts: [] });
   if (myW && Array.isArray(myW.posts)) posts.push(...myW.posts.map(x => ({ ...x, repoOwner: me })));
-  wallCache.posts = posts.sort((a, b) => b.ts - a.ts);
+  // merge по id зі старим кешем — щойно опубліковане не зникає при CDN-лагу чи 500 від API
+  const byId = new Map(wallCache.posts.map(x => [x.id, x]));
+  for (const p of posts) byId.set(p.id, p);
+  wallCache.posts = [...byId.values()].sort((a, b) => b.ts - a.ts);
 }
 async function refreshLikes() {
   const list = await searchParticipants();
@@ -343,20 +349,29 @@ async function loadMyProfile() {
 // ================= ДІАЛОГИ =================
 async function refreshDialogs() {
   const list = await searchParticipants();
-  dialogsCache = {};
+  const fresh = {};
   for (const p of list) {
     if (p.login === me) continue;
     const msgs = await readMyFile('data/outbox/' + p.login + '.json', []);
-    if (Array.isArray(msgs) && msgs.length) dialogsCache[p.login] = [...(dialogsCache[p.login] || []), ...msgs];
+    if (Array.isArray(msgs) && msgs.length) fresh[p.login] = [...(fresh[p.login] || []), ...msgs];
   }
   for (const p of list) {
     if (p.login === me) continue;
     try {
       const msgs = await readFile(p.login, p.repo, 'data/outbox/' + me + '.json');
-      if (Array.isArray(msgs) && msgs.length) dialogsCache[p.login] = [...(dialogsCache[p.login] || []), ...msgs];
+      if (Array.isArray(msgs) && msgs.length) fresh[p.login] = [...(fresh[p.login] || []), ...msgs];
     } catch (e) { }
   }
-  for (const k in dialogsCache) dialogsCache[k].sort((a, b) => a.ts - b.ts);
+  // merge по id зі старим кешем — свої щойно відправлені повідомлення не зникають
+  // поки raw CDN або API не віддадуть свіжу версію
+  for (const k in dialogsCache) {
+    const old = dialogsCache[k] || [];
+    const have = new Set((fresh[k] || []).map(m => m.id));
+    const missing = old.filter(m => !have.has(m.id));
+    if (missing.length) fresh[k] = [...(fresh[k] || []), ...missing];
+  }
+  for (const k in fresh) fresh[k].sort((a, b) => a.ts - b.ts);
+  dialogsCache = fresh;
 }
 async function sendMessage(peer, text) {
   const path = 'data/outbox/' + peer + '.json';
