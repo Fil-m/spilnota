@@ -387,6 +387,29 @@ a:hover { text-decoration: underline; }
 .pg-card + .pg-card { border-top: 1px solid var(--border); border-bottom: none; }
 .pg-card:last-child { border-bottom: none; }
 
+/* ---------- Фото-аватар ---------- */
+.av-canvas { display: block; border-radius: 2px; background: rgba(0,0,0,0.06); }
+.av-upload {
+  border: 2px dashed var(--border); border-radius: 2px;
+  padding: 18px; text-align: center; margin: 8px 0;
+  background: var(--comment-bg);
+}
+.av-current { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; color: var(--text2); }
+.av-current .avatar { width: 50px; height: 50px; }
+.av-preview-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+.av-preview { text-align: center; }
+.av-preview canvas { border: 2px solid var(--border); border-radius: 2px; width: 180px; height: 180px; background: var(--bg); }
+.av-preview-label { font-size: 11px; color: var(--text3); margin-bottom: 4px; }
+.av-options { flex: 1; min-width: 240px; }
+.av-effects { display: flex; flex-wrap: wrap; gap: 6px; }
+.av-effect {
+  border: 2px solid var(--border); border-radius: 2px; padding: 5px;
+  text-align: center; cursor: pointer; background: var(--card);
+}
+.av-effect.sel { border-color: var(--btn-top); background: var(--mine-bubble); }
+.av-effect canvas { display: block; width: 60px; height: 60px; border-radius: 2px; margin-bottom: 3px; background: var(--bg); }
+.av-effect small { font-size: 10px; color: var(--text2); display: block; }
+
 /* ---------- Мобільна версія ---------- */
 .bottom-nav {
   display: none;
