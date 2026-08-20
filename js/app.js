@@ -545,8 +545,13 @@ function matchSpotify(url) {
   return m ? m[1] + '/' + m[2] : null;
 }
 function matchSoundCloud(url) {
+  // повні лінки soundcloud.com/юзер/трек
   const m = url.match(/soundcloud\.com\/[\w-]+\/[\w-]+/);
-  return m ? m[0] : null;
+  if (m) return m[0];
+  // короткі лінки on.soundcloud.com/<code>
+  const s = url.match(/on\.soundcloud\.com\/[\w-]+/);
+  if (s) return s[0];
+  return null;
 }
 function matchDailymotion(url) {
   const m = url.match(/dailymotion\.com\/video\/([A-Za-z0-9]+)/);
