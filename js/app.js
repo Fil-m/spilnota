@@ -441,6 +441,7 @@ function renderScreen() {
   }
   renderNav();
   drawAvatars();
+  loadScEmbeds();
   // синхронізуємо лічильник: поллінг не перерендерить екран, поки дані не зміняться
   lastRenderSig = currentSig(screen);
 }
@@ -599,7 +600,7 @@ function embedBlock(url) {
   const sc = matchSoundCloud(clean);
   if (sc) {
     return `${link}
-      <div class="embed-wrap sc"><iframe src="https://w.soundcloud.com/player/?url=${encodeURIComponent(href)}&color=%23ff5500&auto_play=false&hide_related=false&show_comments=true&show_user=true&show_reposts=false&show_teaser=true" title="SoundCloud" loading="lazy" allowfullscreen></iframe></div>`;
+      <div class="sc-embed" data-url="${esc(href)}"><div class="sc-loading">⏳ SoundCloud завантажується…</div></div>`;
   }
   const dm = matchDailymotion(clean);
   if (dm) {
@@ -619,6 +620,29 @@ function renderPostText(text) {
   }
   parts.push(esc(text.slice(last)));
   return parts.join('');
+}
+// SoundCloud: старий w.soundcloud.com/player мертвий (404), тепер через офіційний oembed
+const scEmbedCache = {};
+async function loadScEmbeds() {
+  const els = document.querySelectorAll('.sc-embed');
+  for (const el of els) {
+    if (el.dataset.loaded) continue;
+    el.dataset.loaded = '1';
+    const url = el.dataset.url;
+    let html = scEmbedCache[url];
+    if (!html) {
+      try {
+        const r = await fetch('https://soundcloud.com/oembed?format=json&maxheight=166&url=' + encodeURIComponent(url));
+        if (r.ok) {
+          const d = await r.json();
+          html = d.html || '';
+          scEmbedCache[url] = html;
+        }
+      } catch (e) { }
+    }
+    if (html) el.innerHTML = html;
+    else el.innerHTML = '<div class="sc-fail">SoundCloud не вдалося вбудувати — відкрийте за посиланням ↗</div>';
+  }
 }
 function postHtml(post) {
   const owner = post.repoOwner;
