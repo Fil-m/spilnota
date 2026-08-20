@@ -300,7 +300,11 @@ async function refreshWall() {
 async function refreshLikes() {
   const list = await searchParticipants();
   const likes = [];
+  // свій файл — завжди, незалежно від participants (як refreshWall)
+  const myD = await readMyFile('data/likes.json', { likes: [] });
+  if (myD && Array.isArray(myD.likes)) likes.push(...myD.likes.map(x => ({ ...x, liker: me })));
   for (const p of list) {
+    if (p.login === me) continue;
     try {
       const d = await readFile(p.login, p.repo, 'data/likes.json');
       if (d && Array.isArray(d.likes)) likes.push(...d.likes.map(x => ({ ...x, liker: p.login })));
@@ -311,7 +315,11 @@ async function refreshLikes() {
 async function refreshComments() {
   const list = await searchParticipants();
   const comments = [];
+  // свій файл — завжди
+  const myD = await readMyFile('data/comments.json', { comments: [] });
+  if (myD && Array.isArray(myD.comments)) comments.push(...myD.comments.map(x => ({ ...x, author: me })));
   for (const p of list) {
+    if (p.login === me) continue;
     try {
       const d = await readFile(p.login, p.repo, 'data/comments.json');
       if (d && Array.isArray(d.comments)) comments.push(...d.comments.map(x => ({ ...x, author: p.login })));
@@ -1412,10 +1420,15 @@ function startPolling() {
     if (!me) return;
     if (!moduleEnabled('wall')) return;
     try {
+      const c0 = commentsCache.length, l0 = likesCache.length;
       await refreshLikes();
       await refreshComments();
       const { screen } = parseHash();
-      if (screen === 'me' || screen === 'feed' || screen === 'user') renderScreen();
+      if (screen === 'me' || screen === 'feed' || screen === 'user') {
+        // рендеримо тільки якщо дані змінились — інакше стирається введений текст у полях
+        if (commentsCache.length !== c0 || likesCache.length !== l0) renderScreen();
+        else renderNav();
+      }
     } catch (e) { }
   }, 15000);
 }
