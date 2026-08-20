@@ -522,25 +522,91 @@ function matchVimeo(url) {
   const m = url.match(/vimeo\.com\/(\d{6,})/);
   return m ? m[1] : null;
 }
+function matchInstagram(url) {
+  const m = url.match(/instagram\.com\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
+  return m ? m[1] + '/' + m[2] : null;
+}
+function matchFacebook(url) {
+  const clean = url.replace(/[),.;!?]+$/, '');
+  if (/facebook\.com\//.test(clean) && (clean.includes('/posts/') || clean.includes('/videos/') || clean.includes('/watch') || clean.includes('/photo'))) return clean;
+  return null;
+}
+function matchTwitchVideo(url) {
+  const m = url.match(/twitch\.tv\/videos\/(\d+)/);
+  return m ? m[1] : null;
+}
+function matchTwitchClip(url) {
+  const m = url.match(/twitch\.tv\/[\w-]+\/clip\/([\w-]+)/);
+  return m ? m[1] : null;
+}
+function matchSpotify(url) {
+  const m = url.match(/open\.spotify\.com\/(track|album|playlist|episode)\/([A-Za-z0-9]+)/);
+  return m ? m[1] + '/' + m[2] : null;
+}
+function matchSoundCloud(url) {
+  const m = url.match(/soundcloud\.com\/[\w-]+\/[\w-]+/);
+  return m ? m[0] : null;
+}
+function matchDailymotion(url) {
+  const m = url.match(/dailymotion\.com\/video\/([A-Za-z0-9]+)/);
+  return m ? m[1] : null;
+}
 function embedBlock(url) {
   const clean = url.replace(/[),.;!?]+$/, '');
   const href = /^https?:/.test(clean) ? clean : 'https://' + clean;
+  const link = `<a href="${esc(href)}" target="_blank">${esc(clean)}</a>`;
   const yt = matchYouTube(clean);
   if (yt) {
-    return `<a href="${esc(href)}" target="_blank">${esc(clean)}</a>
+    return `${link}
       <div class="embed-wrap"><iframe src="https://www.youtube-nocookie.com/embed/${yt}" title="YouTube" loading="lazy" allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
   }
   const tt = matchTikTok(clean);
   if (tt) {
-    return `<a href="${esc(href)}" target="_blank">${esc(clean)}</a>
+    return `${link}
       <div class="embed-wrap"><iframe src="https://www.tiktok.com/embed/v2/${tt}" title="TikTok" loading="lazy" allowfullscreen></iframe></div>`;
   }
   const vm = matchVimeo(clean);
   if (vm) {
-    return `<a href="${esc(href)}" target="_blank">${esc(clean)}</a>
+    return `${link}
       <div class="embed-wrap"><iframe src="https://player.vimeo.com/video/${vm}" title="Vimeo" loading="lazy" allowfullscreen></iframe></div>`;
   }
-  return `<a href="${esc(href)}" target="_blank">${esc(clean)}</a>`;
+  const ig = matchInstagram(clean);
+  if (ig) {
+    return `${link}
+      <div class="embed-wrap ig"><iframe src="https://www.instagram.com/${ig}/embed/" title="Instagram" loading="lazy" allowfullscreen></iframe></div>`;
+  }
+  const fb = matchFacebook(clean);
+  if (fb) {
+    return `${link}
+      <div class="embed-wrap fb"><iframe src="https://www.facebook.com/plugins/post.php?href=${encodeURIComponent(href)}&show_text=true&width=500" title="Facebook" loading="lazy" allowfullscreen style="border:none;overflow:hidden"></iframe></div>`;
+  }
+  const tv = matchTwitchVideo(clean);
+  if (tv) {
+    return `${link}
+      <div class="embed-wrap"><iframe src="https://player.twitch.tv/?video=${tv}&parent=${encodeURIComponent(location.hostname)}" title="Twitch" loading="lazy" allowfullscreen></iframe></div>`;
+  }
+  const clip = matchTwitchClip(clean);
+  if (clip) {
+    return `${link}
+      <div class="embed-wrap"><iframe src="https://clips.twitch.tv/embed?clip=${clip}&parent=${encodeURIComponent(location.hostname)}" title="Twitch" loading="lazy" allowfullscreen></iframe></div>`;
+  }
+  const sp = matchSpotify(clean);
+  if (sp) {
+    const h = sp.startsWith('track') || sp.startsWith('episode') ? 152 : 352;
+    return `${link}
+      <div class="embed-wrap sp" style="height:${h}px"><iframe src="https://open.spotify.com/embed/${sp}" title="Spotify" loading="lazy" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe></div>`;
+  }
+  const sc = matchSoundCloud(clean);
+  if (sc) {
+    return `${link}
+      <div class="embed-wrap sc"><iframe src="https://w.soundcloud.com/player/?url=${encodeURIComponent(href)}&color=%23ff5500&auto_play=false&hide_related=false&show_comments=true&show_user=true&show_reposts=false&show_teaser=true" title="SoundCloud" loading="lazy" allowfullscreen></iframe></div>`;
+  }
+  const dm = matchDailymotion(clean);
+  if (dm) {
+    return `${link}
+      <div class="embed-wrap"><iframe src="https://www.dailymotion.com/embed/video/${dm}" title="Dailymotion" loading="lazy" allowfullscreen></iframe></div>`;
+  }
+  return link;
 }
 function renderPostText(text) {
   const re = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/g;
