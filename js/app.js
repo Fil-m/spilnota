@@ -14,6 +14,7 @@ const LS_TOKEN = 'spilnota_token';
 const LS_LOGIN = 'spilnota_login';
 const LS_READ = 'spilnota_read_';
 const LS_CFG = 'spilnota_cfg';
+const LS_THEME_MIG = 'spilnota_theme_mig';
 const LS_HIDDEN = 'spilnota_hidden';
 const LS_PROJ_FILTER = 'spilnota_proj_filter';
 const LS_PROJ_ORDER = 'spilnota_proj_order';
@@ -122,12 +123,18 @@ const EMOJIS = ['🦊','🐱','🐶','🐻','🐼','🦁','🐸','🐵','🐨','
 function defaultCfg() {
   const enabled = {};
   for (const m of MODULE_DEFS) enabled[m.id] = m.def;
-  return { enabled, font: 'ptsans', theme: 'classic' };
+  return { enabled, font: 'ptsans', theme: 'sunset' };
 }
 function getCfg() {
   try {
     const cfg = { ...defaultCfg(), ...JSON.parse(localStorage.getItem(LS_CFG) || '{}') };
     if (cfg.theme === 'vk2013') { cfg.theme = 'classic'; saveCfg(cfg); }
+    // одноразова міграція на новий дефолт (померанчова); пізніший вибір користувача не чіпаємо
+    if (cfg.theme === 'classic' && !localStorage.getItem(LS_THEME_MIG)) {
+      cfg.theme = 'sunset';
+      localStorage.setItem(LS_THEME_MIG, '1');
+      saveCfg(cfg);
+    }
     return cfg;
   } catch (e) { return defaultCfg(); }
 }
