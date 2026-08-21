@@ -455,3 +455,18 @@ a:hover { text-decoration: underline; }
   .chat-messages { max-height: 52vh; }
   .post-head { gap: 8px; }
 }
+
+/* ---------- Групи ---------- */
+.g-emoji { font-size: 34px; line-height: 1.2; text-align: center; padding: 4px 0; }
+.g-big { font-size: 64px; display: flex; align-items: center; justify-content: center; }
+.g-admin-badge {
+  font-size: 11px; font-weight: 700; color: #fff; background: var(--btn-top);
+  border-radius: 3px; padding: 1px 7px; vertical-align: middle;
+}
+.g-member { margin-right: 6px; white-space: nowrap; }
+.g-members-admin { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.g-member-admin {
+  border: 1px solid var(--border); background: var(--comment-bg); border-radius: 3px;
+  padding: 2px 8px; font-size: 13px;
+}
+.g-member-admin a { color: #c0392b; font-weight: 700; margin-left: 4px; text-decoration: none; }

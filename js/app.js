@@ -96,6 +96,7 @@ const MODULE_DEFS = [
   { id: 'wall', name: 'Стіна (стрічка)', icon: '📰', desc: 'Пости, лайки, коментарі — стрічка всіх', def: true, screens: ['feed'], poll: 'wall' },
   { id: 'chat', name: 'Повідомлення', icon: '💬', desc: 'Приватні діалоги між користувачами', def: true, screens: ['messages', 'dialog'], poll: 'dialogs' },
   { id: 'people', name: 'Люди', icon: '👥', desc: 'Список учасників спільноти', def: true, screens: ['people'], poll: null },
+  { id: 'groups', name: 'Групи', icon: '👪', desc: 'Спільноти за інтересами: своя стіна, учасники, адмін', def: true, screens: ['groups', 'group'], poll: 'groups' },
   { id: 'projects', name: 'Мої проекти', icon: '📁', desc: 'Сторінки та проекти з GitHub: фільтри, описи, приховування', def: true, screens: ['projects'], poll: null },
   { id: 'pages', name: 'Сторінки', icon: '🌐', desc: 'Навігатор задеплоєних сторінок: категорії, описи, порядок', def: true, screens: ['pages'], poll: null },
   { id: 'avatar', name: 'Фото-аватар', icon: '📸', desc: 'Ваше фото з ефектом частинок замість аватара', def: true, screens: ['avatar'], poll: null },
@@ -112,6 +113,13 @@ let likesCache = [];
 let commentsCache = [];
 let dialogsCache = {};
 let currentDialogPeer = null;
+// групи: groupsCache[id] = {id, name, desc, emoji, admin, members:[], created}
+// groupWallCache = [{id, groupId, author, text, ts, repoOwner}]
+let groupsCache = {};
+let groupWallCache = [];
+let groupLikesCache = [];
+let groupCommentsCache = [];
+let currentGroupId = null;
 let lastRenderSig = '';
 let lastSearch = 0;
 let projectsCache = null;
@@ -389,6 +397,183 @@ async function sendMessage(peer, text) {
   if (ok) dialogsCache[peer] = [...(dialogsCache[peer] || []), msg].sort((a, b) => a.ts - b.ts);
   return ok;
 }
+
+// ================= ГРУПИ =================
+// Група = метадані у репо адміна (data/groups/<id>.json: name, desc, emoji, admin, members[]).
+// Реєстр груп — кожен учасник тримає у своєму репо data/groups.json (список груп, де він є).
+// Стіна групи — data/gwall/<id>.json у кожного учасника; лайки/коментарі аналогічно.
+async function refreshGroups() {
+  const list = await searchParticipants();
+  const fresh = {};
+  // свій реєстр — завжди
+  const myG = await readMyFile('data/groups.json', { groups: [] });
+  if (myG && Array.isArray(myG.groups)) for (const g of myG.groups) if (g && g.id) fresh[g.id] = { ...g };
+  for (const p of list) {
+    if (p.login === me) continue;
+    try {
+      const d = await readFile(p.login, p.repo, 'data/groups.json');
+      if (d && Array.isArray(d.groups)) for (const g of d.groups) if (g && g.id && !fresh[g.id]) fresh[g.id] = { ...g };
+    } catch (e) { }
+  }
+  // повні метадані (опис, учасники) — з репо АДМІНА: data/groups/<id>.json
+  for (const id in fresh) {
+    const g = fresh[id];
+    const admin = g.admin || me;
+    try {
+      let full = null;
+      if (admin === me) full = await readMyFile('data/groups/' + id + '.json', null);
+      else full = await readFile(admin, CONFIG.repoPrefix + admin, 'data/groups/' + id + '.json');
+      if (full && full.id) fresh[id] = { ...fresh[id], ...full };
+    } catch (e) { }
+  }
+  // merge зі старим кешем: локально створені групи не зникають поки CDN не оновиться
+  for (const id in groupsCache) if (!fresh[id]) fresh[id] = groupsCache[id];
+  groupsCache = fresh;
+}
+function myGroups() {
+  return Object.values(groupsCache).filter(g => Array.isArray(g.members) ? g.members.includes(me) : g.admin === me);
+}
+function groupMembers(g) {
+  if (Array.isArray(g.members)) return g.members;
+  return g.admin ? [g.admin] : [];
+}
+async function refreshGroupWall() {
+  const gid = currentGroupId;
+  if (!gid) { groupWallCache = []; groupLikesCache = []; groupCommentsCache = []; return; }
+  const g = groupsCache[gid];
+  const members = g ? groupMembers(g) : [me];
+  const fresh = [], likes = [], comments = [];
+  for (const m of members) {
+    if (m === me) {
+      const myW = await readMyFile('data/gwall/' + gid + '.json', { posts: [] });
+      if (myW && Array.isArray(myW.posts)) fresh.push(...myW.posts.map(x => ({ ...x, repoOwner: m })));
+      const myL = await readMyFile('data/glikes/' + gid + '.json', { likes: [] });
+      if (myL && Array.isArray(myL.likes)) likes.push(...myL.likes.map(x => ({ ...x, liker: m })));
+      const myC = await readMyFile('data/gcomments/' + gid + '.json', { comments: [] });
+      if (myC && Array.isArray(myC.comments)) comments.push(...myC.comments.map(x => ({ ...x, author: m })));
+    } else {
+      try {
+        const w = await readFile(m, CONFIG.repoPrefix + m, 'data/gwall/' + gid + '.json');
+        if (w && Array.isArray(w.posts)) fresh.push(...w.posts.map(x => ({ ...x, repoOwner: m })));
+      } catch (e) { }
+      try {
+        const l = await readFile(m, CONFIG.repoPrefix + m, 'data/glikes/' + gid + '.json');
+        if (l && Array.isArray(l.likes)) likes.push(...l.likes.map(x => ({ ...x, liker: m })));
+      } catch (e) { }
+      try {
+        const c = await readFile(m, CONFIG.repoPrefix + m, 'data/gcomments/' + gid + '.json');
+        if (c && Array.isArray(c.comments)) comments.push(...c.comments.map(x => ({ ...x, author: m })));
+      } catch (e) { }
+    }
+  }
+  const byId = new Map(groupWallCache.map(x => [x.id, x]));
+  for (const p of fresh) byId.set(p.id, p);
+  groupWallCache = [...byId.values()].sort((a, b) => b.ts - a.ts);
+  groupLikesCache = likes;
+  groupCommentsCache = comments;
+}
+async function createGroup(name, desc, emoji) {
+  const id = uid();
+  const g = { id, name, desc: desc || '', emoji: emoji || '👪', admin: me, members: [me], created: Date.now() };
+  const ok = await writeMyFile('data/groups/' + id + '.json', g);
+  if (!ok) { toast('❌ Не вдалося створити групу'); return null; }
+  const reg = await readMyFile('data/groups.json', { groups: [] });
+  reg.groups = reg.groups || [];
+  if (!reg.groups.find(x => x.id === id)) reg.groups.push({ id, name: g.name, emoji: g.emoji, admin: me });
+  await writeMyFile('data/groups.json', reg);
+  groupsCache[id] = g;
+  return id;
+}
+async function joinGroup(id) {
+  const g = groupsCache[id];
+  if (!g) return;
+  if (g.admin === me) return;
+  // заявка на вступ — пишемо адміну у його репо через outbox (адмін побачить у чаті)
+  const ok = await sendMessage(g.admin, '🙋 Заявка у групу «' + g.name + '»: вступ');
+  if (ok) toast('📨 Заявку надіслано адміну (' + g.admin + ')');
+  return ok;
+}
+async function addMember(id, login) {
+  const g = groupsCache[id];
+  if (!g || g.admin !== me) return false;
+  const members = groupMembers(g);
+  if (members.includes(login)) { toast('Вже учасник'); return true; }
+  members.push(login);
+  g.members = members;
+  const ok = await writeMyFile('data/groups/' + id + '.json', g);
+  if (ok) {
+    groupsCache[id] = { ...g };
+    toast('✅ ' + login + ' додано до групи');
+  } else toast('❌ Не вдалося оновити групу');
+  return ok;
+}
+async function removeMember(id, login) {
+  const g = groupsCache[id];
+  if (!g || g.admin !== me) return false;
+  if (login === g.admin) { toast('Адміна не можна видалити'); return false; }
+  g.members = groupMembers(g).filter(m => m !== login);
+  const ok = await writeMyFile('data/groups/' + id + '.json', g);
+  if (ok) { groupsCache[id] = { ...g }; toast('🗑 ' + login + ' видалено з групи'); }
+  else toast('❌ Не вдалося оновити групу');
+  return ok;
+}
+async function updateGroup(id, name, desc, emoji) {
+  const g = groupsCache[id];
+  if (!g || g.admin !== me) return false;
+  g.name = name; g.desc = desc || ''; g.emoji = emoji || g.emoji;
+  const ok = await writeMyFile('data/groups/' + id + '.json', g);
+  if (ok) { groupsCache[id] = { ...g }; toast('✅ Групу оновлено'); }
+  else toast('❌ Не вдалося зберегти');
+  return ok;
+}
+async function submitGroupPost(text) {
+  const gid = currentGroupId;
+  const inp = $('g-new-post');
+  const t = (text != null ? text : (inp ? inp.value : '')).trim();
+  if (!t) { toast('✏ Напишіть щось'); return; }
+  const g = groupsCache[gid];
+  if (!g || !groupMembers(g).includes(me)) { toast('Ви не учасник групи'); return; }
+  if (inp) inp.value = '';
+  const post = { id: uid(), author: me, text: t, ts: Date.now() };
+  const w = await readMyFile('data/gwall/' + gid + '.json', { posts: [] });
+  w.posts = w.posts || [];
+  w.posts.push(post);
+  const ok = await writeMyFile('data/gwall/' + gid + '.json', w);
+  if (ok) {
+    groupWallCache.push({ ...post, repoOwner: me });
+    groupWallCache.sort((a, b) => b.ts - a.ts);
+    renderScreen();
+  } else toast('❌ Не вдалося зберегти');
+}
+async function toggleGroupLike(postId) {
+  const gid = currentGroupId;
+  const d = await readMyFile('data/glikes/' + gid + '.json', { likes: [] });
+  d.likes = d.likes || [];
+  const i = d.likes.findIndex(l => l.postId === postId && l.liker === me);
+  if (i >= 0) d.likes.splice(i, 1); else d.likes.push({ postId, liker: me, ts: Date.now() });
+  const ok = await writeMyFile('data/glikes/' + gid + '.json', d);
+  if (ok) { await refreshGroupWall(); renderScreen(); }
+  else toast('❌ Не вдалося зберегти');
+}
+async function submitGroupComment(postId, text) {
+  const gid = currentGroupId;
+  const inp = $('gc-in-' + postId);
+  const t = (text != null ? text : (inp ? inp.value : '')).trim();
+  if (!t) return;
+  if (inp) inp.value = '';
+  const d = await readMyFile('data/gcomments/' + gid + '.json', { comments: [] });
+  d.comments = d.comments || [];
+  d.comments.push({ postId, author: me, text: t, ts: Date.now() });
+  const ok = await writeMyFile('data/gcomments/' + gid + '.json', d);
+  if (ok) { await refreshGroupWall(); renderScreen(); }
+}
+function focusGroupComment(postId) {
+  const el = $('gcmt-' + postId);
+  if (el) el.classList.remove('hidden');
+  const inp = $('gc-in-' + postId);
+  if (inp) inp.focus();
+}
+
 function readTs(peer) { return +(localStorage.getItem(LS_READ + peer) || 0); }
 function setRead(peer, ts) { localStorage.setItem(LS_READ + peer, String(ts)); }
 function unreadFor(peer) {
@@ -419,7 +604,8 @@ function firstEnabledScreen() {
 // ================= РЕНДЕР =================
 const CONTENT = () => $('content');
 function currentSig(screen) {
-  return screen + '|' + wallCache.posts.length + '|' + Object.keys(dialogsCache).length + '|' + unreadCount();
+  return screen + '|' + wallCache.posts.length + '|' + Object.keys(dialogsCache).length + '|' + unreadCount()
+    + '|' + Object.keys(groupsCache).length + '|' + groupWallCache.length;
 }
 function renderNav() {
   const { screen } = parseHash();
@@ -454,6 +640,8 @@ function renderScreen() {
     case 'messages': renderMessages(); break;
     case 'dialog': renderDialog(param); break;
     case 'people': renderPeople(); break;
+    case 'groups': renderGroups(); break;
+    case 'group': renderGroup(param); break;
     case 'projects': renderProjects(); break;
     case 'pages': renderPages(); break;
     case 'avatar': renderAvatar(); break;
@@ -724,6 +912,176 @@ function renderPeople() {
           </div>`).join('')}
       </div>
     </div>`;
+}
+
+// ---- Групи ----
+function renderGroups() {
+  const all = Object.values(groupsCache).sort((a, b) => (b.created || 0) - (a.created || 0));
+  const mine = myGroups();
+  const other = all.filter(g => !mine.some(m => m.id === g.id));
+  CONTENT().innerHTML = `
+    <div class="card">
+      <div class="card-title">Групи</div>
+      <div class="quick-post">
+        ${avatarHtml(me, myProfile.emoji, 'sm')}
+        <input class="input" id="g-name-in" placeholder="Назва нової групи..." maxlength="60">
+        <button class="btn" onclick="createGroupPrompt()">Створити групу</button>
+      </div>
+      <div class="err" id="g-create-err"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Мої групи (${mine.length})</div>
+      ${mine.length ? `<div class="people-grid">${mine.map(groupCard).join('')}</div>` : '<div class="empty">Ви ще не в групах</div>'}
+    </div>
+    ${other.length ? `<div class="card">
+      <div class="card-title">Інші групи спільноти (${other.length})</div>
+      <div class="people-grid">${other.map(groupCard).join('')}</div>
+    </div>` : ''}`;
+}
+function groupCard(g) {
+  const members = groupMembers(g);
+  const isMine = g.admin === me;
+  return `
+    <div class="person" onclick="go('group/' + encodeURIComponent('${g.id}'))">
+      <div class="p-avatar g-emoji">${esc(g.emoji || '👪')}</div>
+      <div class="p-name">${esc(g.name)}</div>
+      <div class="offline">${members.length} уч. · ${isMine ? 'я адмін' : 'адмін: ' + esc(g.admin)}</div>
+    </div>`;
+}
+async function createGroupPrompt() {
+  const name = ($('g-name-in') || {}).value || '';
+  if (!name.trim()) { $('g-create-err').textContent = 'Вкажіть назву групи'; return; }
+  $('g-create-err').textContent = '';
+  const id = await createGroup(name.trim(), '', '👪');
+  if (id) go('group/' + encodeURIComponent(id));
+}
+function renderGroup(gid) {
+  currentGroupId = gid;
+  const g = groupsCache[gid];
+  if (!g) {
+    CONTENT().innerHTML = `<div class="card"><div class="card-title">Група</div><div class="empty">Завантаження групи...</div></div>`;
+    refreshGroups().then(() => renderScreen());
+    return;
+  }
+  const members = groupMembers(g);
+  const isAdmin = g.admin === me;
+  const isMember = members.includes(me);
+  const posts = groupWallCache.filter(p => p.repoOwner && members.includes(p.repoOwner)).sort((a, b) => b.ts - a.ts);
+  CONTENT().innerHTML = `
+    <div class="card">
+      <div class="profile-head">
+        <div class="profile-avatar g-big">${esc(g.emoji || '👪')}</div>
+        <div class="profile-info">
+          <div class="profile-name">${esc(g.name)} ${isAdmin ? '<span class="g-admin-badge">адмін</span>' : ''}</div>
+          <div class="profile-status">${esc(g.desc || '')}</div>
+          <div class="profile-dt"><b>Адмін:</b> <a href="#/user/${encodeURIComponent(g.admin)}">${esc(g.admin)}</a></div>
+          <div class="profile-dt"><b>Учасники (${members.length}):</b> ${members.map(m => `<a href="#/user/${encodeURIComponent(m)}" class="g-member">${esc(m)}</a>`).join(' ')}</div>
+          <div class="btn-row">
+            ${!isMember && !isAdmin ? `<button class="btn" onclick="joinGroup('${g.id}')">🙋 Вступити</button>` : ''}
+            ${isAdmin ? `<button class="btn gray" onclick="toggleGroupAdmin('${g.id}')">⚙️ Керування</button>
+              <button class="btn gray" onclick="toggleGroupEdit('${g.id}')">✏ Редагувати</button>` : ''}
+          </div>
+          <div id="g-admin-panel" class="hidden">
+            <div class="set-group-title">Додати учасника</div>
+            <div class="quick-post">
+              <input class="input" id="g-add-in" placeholder="Логін учасника (нік у репо)..." maxlength="40">
+              <button class="btn gray" onclick="gAddMember('${g.id}')">Додати</button>
+            </div>
+            <div class="set-group-title">Видалити учасника</div>
+            <div class="g-members-admin">
+              ${members.filter(m => m !== g.admin).map(m => `<span class="g-member-admin">${esc(m)} <a href="javascript:void(0)" onclick="gRemoveMember('${g.id}','${m}')" title="Видалити">✕</a></span>`).join(' ') || '<div class="empty">Тільки адмін</div>'}
+            </div>
+          </div>
+          <div id="g-edit-panel" class="hidden">
+            <div style="height:8px"></div>
+            <label>Назва</label>
+            <input class="input" id="ge-name" maxlength="60" value="${esc(g.name)}">
+            <div style="height:8px"></div>
+            <label>Опис</label>
+            <textarea class="textarea" id="ge-desc" maxlength="300" placeholder="Про що група?">${esc(g.desc || '')}</textarea>
+            <div style="height:8px"></div>
+            <button class="btn" onclick="gSaveEdit('${g.id}')">Зберегти</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    ${isMember || isAdmin ? `
+    <div class="card">
+      <div class="card-title">Стіна групи</div>
+      <div class="quick-post">
+        ${avatarHtml(me, myProfile.emoji, 'sm')}
+        <input class="input" id="g-new-post" placeholder="Пост у групу..." maxlength="2000">
+        <button class="btn" onclick="submitGroupPost()">Написати</button>
+      </div>
+    </div>
+    ${groupPostList(posts, gid)}` : `<div class="card"><div class="empty">Вступіть у групу, щоб бачити стіну</div></div>`}`;
+  const inp = $('g-new-post');
+  if (inp) inp.onkeydown = e => { if (e.key === 'Enter') submitGroupPost(); };
+  const addInp = $('g-add-in');
+  if (addInp) addInp.onkeydown = e => { if (e.key === 'Enter') gAddMember(gid); };
+}
+function groupPostList(posts, gid) {
+  if (!posts.length) return `<div class="card"><div class="empty">У групі поки що тихо. Напишіть перший пост!</div></div>`;
+  return posts.map(p => {
+    const liked = groupLikesCache.some(l => l.postId === p.id && l.liker === me);
+    const likes = groupLikesCache.filter(l => l.postId === p.id);
+    const comments = groupCommentsCache.filter(c => c.postId === p.id).sort((a, b) => a.ts - b.ts);
+    return `
+    <div class="card post">
+      <div class="post-head">
+        ${avatarHtml(p.repoOwner, '🙂')}
+        <div class="post-info">
+          <div><a class="post-author" href="#/user/${encodeURIComponent(p.repoOwner)}">${esc(p.repoOwner)}</a>
+          <span class="post-time"> · ${timeAgo(p.ts)}</span></div>
+          <div class="post-text">${renderPostText(p.text)}</div>
+        </div>
+      </div>
+      <div class="post-actions">
+        <a href="javascript:void(0)" class="${liked ? 'liked' : ''}" onclick="toggleGroupLike('${p.id}')">👍 Мені подобається${likes.length ? ' (' + likes.length + ')' : ''}</a>
+        <a href="javascript:void(0)" onclick="focusGroupComment('${p.id}')">💬 Коментувати${comments.length ? ' (' + comments.length + ')' : ''}</a>
+      </div>
+      ${comments.length ? `<div class="comments">${comments.map(c => `
+        <div class="comment">${avatarHtml(c.author, '🙂', 'xs')}
+          <div class="c-body"><span class="c-author">${esc(c.author)}</span> <span class="c-text">${renderPostText(c.text)}</span>
+          <div class="c-time">${timeAgo(c.ts)}</div></div></div>`).join('')}</div>` : ''}
+      <div class="comments hidden" id="gcmt-${p.id}">
+        <div class="comment-input">
+          ${avatarHtml(me, myProfile.emoji, 'xs')}
+          <input class="input" id="gc-in-${p.id}" placeholder="Написати коментар..." maxlength="500">
+          <button class="btn gray" onclick="submitGroupComment('${p.id}')">OK</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleGroupAdmin() {
+  const el = $('g-admin-panel');
+  if (el) el.classList.toggle('hidden');
+}
+function toggleGroupEdit() {
+  const el = $('g-edit-panel');
+  if (el) el.classList.toggle('hidden');
+}
+async function gAddMember(gid) {
+  const inp = $('g-add-in');
+  const login = (inp ? inp.value : '').trim();
+  if (!login) { toast('Вкажіть логін'); return; }
+  if (inp) inp.value = '';
+  await addMember(gid, login);
+  await refreshGroupWall();
+  renderScreen();
+}
+async function gRemoveMember(gid, login) {
+  await removeMember(gid, login);
+  await refreshGroupWall();
+  renderScreen();
+}
+async function gSaveEdit(gid) {
+  const name = ($('ge-name') || {}).value || '';
+  const desc = ($('ge-desc') || {}).value || '';
+  if (!name.trim()) { toast('Назва не може бути порожньою'); return; }
+  const ok = await updateGroup(gid, name.trim(), desc);
+  if (ok) { toggleGroupEdit(); renderScreen(); }
 }
 
 // ---- Мої проекти (GitHub) ----
@@ -1579,6 +1937,10 @@ function startPolling() {
       await searchParticipants();
       if (mod.poll === 'wall' || screen === 'me' || screen === 'user') await refreshWall();
       if (mod.poll === 'dialogs' || screen === 'messages') await refreshDialogs();
+      if (mod.poll === 'groups' || screen === 'groups' || screen === 'group') {
+        await refreshGroups();
+        if (screen === 'group') await refreshGroupWall();
+      }
       const sig = currentSig(screen);
       if (sig !== lastRenderSig) { lastRenderSig = sig; renderScreen(); }
       else renderNav();
@@ -1776,7 +2138,7 @@ async function finishRegistration() {
 // ================= СТАРТ =================
 async function refreshAll() {
   await searchParticipants(true);
-  await Promise.all([refreshWall(), refreshLikes(), refreshComments(), refreshDialogs(), loadMyProfile(), refreshAvatars()]);
+  await Promise.all([refreshWall(), refreshLikes(), refreshComments(), refreshDialogs(), loadMyProfile(), refreshAvatars(), refreshGroups()]);
 }
 function renderHeader() {
   const hu = $('header-user');
@@ -1815,6 +2177,7 @@ async function init() {
     const mod = moduleOfScreen(screen);
     if (!mod || !moduleEnabled(mod.id)) { go(firstEnabledScreen()); return; }
     if (screen === 'dialog') { refreshDialogs().then(() => renderScreen()); }
+    else if (screen === 'group') { refreshGroups().then(() => refreshGroupWall()).then(() => renderScreen()); }
     else renderScreen();
   });
 }
