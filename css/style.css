@@ -437,9 +437,13 @@ a:hover { text-decoration: underline; }
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
   background: var(--card);
   border-top: 2px solid var(--border);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.bottom-nav::-webkit-scrollbar { display: none; }
 .bottom-nav a {
-  flex: 1; text-align: center; padding: 6px 0 4px;
+  flex: 1 0 auto; min-width: 64px; text-align: center; padding: 6px 6px 4px;
   font-size: 18px; color: var(--link);
 }
 .bottom-nav a small { display: block; font-size: 9px; font-weight: 700; }

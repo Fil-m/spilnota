@@ -92,14 +92,13 @@ const FONTS = {
 // ================= МОДУЛІ =================
 // Кожен модуль: id, назва, опис, дефолт, список екранів, поллінг
 const MODULE_DEFS = [
-  { id: 'profile', name: 'Профіль', icon: '🏠', desc: 'Моя сторінка, редагування, сторінки користувачів', def: true, screens: ['me', 'edit', 'user'], poll: 'wall' },
+  { id: 'profile', name: 'Профіль', icon: '🏠', desc: 'Моя сторінка, редагування, фото-аватар, сторінки користувачів', def: true, screens: ['me', 'edit', 'user', 'avatar'], poll: 'wall' },
   { id: 'wall', name: 'Стіна (стрічка)', icon: '📰', desc: 'Пости, лайки, коментарі — стрічка всіх', def: true, screens: ['feed'], poll: 'wall' },
   { id: 'chat', name: 'Повідомлення', icon: '💬', desc: 'Приватні діалоги між користувачами', def: true, screens: ['messages', 'dialog'], poll: 'dialogs' },
   { id: 'people', name: 'Люди', icon: '👥', desc: 'Список учасників спільноти', def: true, screens: ['people'], poll: null },
   { id: 'groups', name: 'Групи', icon: '👪', desc: 'Спільноти за інтересами: своя стіна, учасники, адмін', def: true, screens: ['groups', 'group'], poll: 'groups' },
   { id: 'projects', name: 'Мої проекти', icon: '📁', desc: 'Сторінки та проекти з GitHub: фільтри, описи, приховування', def: true, screens: ['projects'], poll: null },
   { id: 'pages', name: 'Сторінки', icon: '🌐', desc: 'Навігатор задеплоєних сторінок: категорії, описи, порядок', def: true, screens: ['pages'], poll: null },
-  { id: 'avatar', name: 'Фото-аватар', icon: '📸', desc: 'Ваше фото з ефектом частинок замість аватара', def: true, screens: ['avatar'], poll: null },
   { id: 'settings', name: 'Налаштування', icon: '⚙️', desc: 'Модулі, шрифт, тема', def: true, screens: ['settings'], poll: null, locked: true }
 ];
 
@@ -676,7 +675,7 @@ function renderMyPage() {
           <div class="profile-dt"><b>Мій репозиторій:</b> <a href="https://github.com/${esc(me)}/${esc(myRepoName())}" target="_blank">${esc(myRepoName())} ↗</a></div>
           <div class="btn-row">
             <button class="btn gray" onclick="go('edit')">✏ Редагувати</button>
-            ${moduleEnabled('avatar') ? '<button class="btn gray" onclick="go(\'avatar\')">📸 Фото-аватар</button>' : ''}
+            <button class="btn gray" onclick="go('avatar')">📸 Фото-аватар</button>
             <button class="btn gray" onclick="go('settings')">⚙️ Налаштування</button>
           </div>
         </div>
