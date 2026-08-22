@@ -122,6 +122,8 @@ let currentGroupId = null;
 let lastRenderSig = '';
 let lastSearch = 0;
 let projectsCache = null;
+let userPageCache = {};    // nick -> {profile, projects, ts} — для сторінки іншого юзера
+let userProjectsCache = {}; // nick -> {ts, repos} — публічні репо іншого юзера
 let projectsLoading = false;
 const AVATAR_COLORS = ['#45688E','#4C6E99','#5E81A8','#2B7A6E','#7A5E8E','#8E5E5E','#5E8E6E','#8E7A5E','#4E7291','#6E4E91'];
 const EMOJIS = ['🦊','🐱','🐶','🐻','🐼','🦁','🐸','🐵','🐨','🐰','🦄','🐲','🐳','🦉','🐺','🦋','🐝','🐢','🐙','🦀','🌻','🍀','🔥','⭐','🌙','⚡','🎮','🎬','🎵','📚','🎨','🧩'];
@@ -1156,6 +1158,70 @@ async function fetchProjects(force) {
   projectsLoading = false;
   return projectsCache;
 }
+// Проекти та сторінки ІНШОГО учасника — публічні репо через GitHub API (кеш 5 хв)
+async function fetchUserProjects(login, force) {
+  const c = userProjectsCache[login];
+  if (c && !force && Date.now() - c.ts < 300000) return c.repos;
+  try {
+    const repos = await ghJson('/users/' + encodeURIComponent(login) + '/repos?per_page=100&sort=updated');
+    if (Array.isArray(repos)) {
+      userProjectsCache[login] = {
+        ts: Date.now(),
+        repos: repos.map(r => ({
+          name: r.name,
+          desc: r.description || '',
+          url: r.html_url,
+          page: r.homepage || (r.has_pages ? 'https://' + r.owner.login + '.github.io/' + r.name + '/' : ''),
+          lang: r.language,
+          stars: r.stargazers_count || 0,
+          forks: r.forks_count || 0,
+          updated: r.updated_at ? new Date(r.updated_at).getTime() : 0,
+          fork: !!r.fork, archived: !!r.archived, priv: !!r.private
+        }))
+      };
+      return userProjectsCache[login].repos;
+    }
+  } catch (e) { }
+  return c ? c.repos : [];
+}
+// Дані чужої сторінки: профіль + проекти (якщо не заборонено). Кеш 60с.
+async function loadUserPage(nick, force) {
+  const c = userPageCache[nick];
+  if (c && !force && Date.now() - c.ts < 60000) return c;
+  const profile = await profileOf(nick);
+  let projects = [];
+  if (profile && profile.showProjects !== false) {
+    projects = await fetchUserProjects(nick, force);
+  }
+  userPageCache[nick] = { profile, projects, ts: Date.now() };
+  return userPageCache[nick];
+}
+async function refreshUserProjects(nick) {
+  await loadUserPage(nick, true);
+  if (parseHash().screen === 'user' && parseHash().param === nick) renderUserPage(nick);
+  toast('⟳ Проекти оновлено');
+}
+// Картка проекту на чужій сторінці (без 👁 і стрілок — це read-only)
+function userProjectCard(p) {
+  return `
+  <div class="proj">
+    <div class="proj-icon">${projectLangIcon(p.lang)}</div>
+    <div class="proj-body">
+      <div class="proj-name">
+        <a href="${esc(p.url)}" target="_blank">${esc(p.name)}</a>
+        ${p.archived ? '<span class="proj-badge arch">🗄 архів</span>' : ''}
+        ${p.fork ? '<span class="proj-badge fork">⑂ форк</span>' : ''}
+      </div>
+      <div class="proj-desc">${p.desc ? esc(p.desc) : '<span class="proj-nodesc">Без опису</span>'}</div>
+      <div class="proj-meta">
+        ${p.lang ? `<span class="proj-lang"><i style="background:${langColor(p.lang)}"></i>${esc(p.lang)}</span>` : ''}
+        ${p.stars ? `<span>⭐ ${p.stars}</span>` : ''}
+        <span>🕓 ${fmtProjTime(p.updated)}</span>
+        ${p.page ? `<a class="proj-page" href="${esc(p.page)}" target="_blank">🌐 Сторінка ↗</a>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
 function projFilterState() {
   const d = { q: '', lang: '', kind: 'all', sort: 'updated' };
   try { return { ...d, ...JSON.parse(localStorage.getItem(LS_PROJ_FILTER) || '{}') }; } catch (e) { return d; }
@@ -1730,23 +1796,45 @@ function renderAvatar() {
 
 // ---- Профіль іншого користувача ----
 function renderUserPage(nick) {
+  const data = userPageCache[nick];
   const posts = wallCache.posts.filter(x => x.repoOwner === nick).sort((a, b) => b.ts - a.ts);
   const canMsg = me && me !== nick && moduleEnabled('chat');
   const av = avatarDataFor(nick);
   const bigAvatar = av
     ? `<canvas class="profile-avatar" id="profile-avatar-canvas" width="240" height="240" data-av="${esc(nick)}"></canvas>`
     : `<div class="profile-avatar" style="background:${avatarColor(nick)}">🙂</div>`;
+  const profile = data ? data.profile : null;
+  const displayName = (profile && profile.name && profile.name !== nick) ? profile.name : nick;
+  const hidden = profile && profile.showProjects === false;
+  const projects = data ? data.projects : null;
+  let projectsBlock = '';
+  if (hidden) {
+    projectsBlock = `<div class="card"><div class="card-title">Проекти та сторінки</div><div class="empty">🙈 ${esc(nick)} приховав свої проекти</div></div>`;
+  } else if (projects === null) {
+    projectsBlock = `<div class="card"><div class="card-title">Проекти та сторінки</div><div class="empty">Завантаження проектів з GitHub...</div></div>`;
+  } else if (projects.length) {
+    projectsBlock = `
+    <div class="card">
+      <div class="card-title">Проекти та сторінки (${projects.length})
+        <button class="btn gray proj-refresh" onclick="refreshUserProjects('${esc(nick)}')" title="Оновити">⟳</button>
+      </div>
+      ${projects.map(userProjectCard).join('')}
+    </div>`;
+  } else {
+    projectsBlock = `<div class="card"><div class="card-title">Проекти та сторінки</div><div class="empty">Немає публічних проектів</div></div>`;
+  }
   CONTENT().innerHTML = `
     <div class="card">
       <div class="profile-head">
         ${bigAvatar}
         <div class="profile-info">
-          <div class="profile-name">${esc(nick)} <span class="online">● в мережі</span></div>
+          <div class="profile-name">${esc(displayName)} <span class="online">● в мережі</span></div>
           <div class="profile-dt"><b>Репозиторій:</b> <a href="https://github.com/${esc(nick)}/${esc(CONFIG.repoPrefix + nick)}" target="_blank">${esc(CONFIG.repoPrefix + nick)} ↗</a></div>
           ${canMsg ? `<div class="btn-row"><button class="btn" onclick="go('dialog/' + encodeURIComponent('${nick}'))">💬 Написати повідомлення</button></div>` : ''}
         </div>
       </div>
     </div>
+    ${projectsBlock}
     ${moduleEnabled('wall') ? `
     <div class="card">
       <div class="card-title">Стіна ${esc(nick)}</div>
@@ -1754,6 +1842,12 @@ function renderUserPage(nick) {
     </div>` : ''}`;
   const pav = $('profile-avatar-canvas');
   if (pav) initAvatarAnim(pav);
+  // асинхронне довантаження профілю + проектів (кеш 60с)
+  if (!data) {
+    loadUserPage(nick).then(() => {
+      if (parseHash().screen === 'user' && parseHash().param === nick) renderUserPage(nick);
+    });
+  }
 }
 
 // ---- Редагування профілю ----
@@ -1776,6 +1870,15 @@ function renderEdit() {
       <div style="height:8px"></div>
       <label>Про себе</label>
       <textarea class="textarea" id="e-about" maxlength="500" placeholder="Кілька слів про себе">${esc(p.about || '')}</textarea>
+      <div style="height:8px"></div>
+      <label>Приватність</label>
+      <div class="set-row">
+        <div class="set-info">
+          <div class="set-name">Проекти та сторінки</div>
+          <div class="set-desc">Показувати мої проекти та сторінки іншим учасникам</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="e-showprojects" ${p.showProjects === false ? '' : 'checked'}><span class="slider"></span></label>
+      </div>
       <div class="btn-row">
         <button class="btn" onclick="saveEdit()">Зберегти</button>
         <button class="btn gray" onclick="go('me')">Скасувати</button>
@@ -2059,6 +2162,7 @@ async function saveEdit() {
     status: $('e-status').value.trim(),
     city: $('e-city').value.trim(),
     about: $('e-about').value.trim(),
+    showProjects: $('e-showprojects') ? $('e-showprojects').checked : (myProfile.showProjects !== false),
     joined: myProfile.joined || Date.now()
   };
   const ok = await writeMyFile('data/profile.json', updated);
