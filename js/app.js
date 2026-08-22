@@ -115,6 +115,7 @@ let currentDialogPeer = null;
 // групи: groupsCache[id] = {id, name, desc, emoji, admin, members:[], created}
 // groupWallCache = [{id, groupId, author, text, ts, repoOwner}]
 let groupsCache = {};
+let groupRegOwners = {}; // gid -> [логіни, у кого група є у СВОЄМУ реєстрі] — для загальних груп
 let groupWallCache = [];
 let groupLikesCache = [];
 let groupCommentsCache = [];
@@ -434,14 +435,19 @@ async function sendMessage(peer, text) {
 async function refreshGroups() {
   const list = await searchParticipants();
   const fresh = {};
+  const owners = {}; // gid -> [logins] — хто має групу у своєму реєстрі (для загальних груп)
   // свій реєстр — завжди
   const myG = await readMyFile('data/groups.json', { groups: [] });
-  if (myG && Array.isArray(myG.groups)) for (const g of myG.groups) if (g && g.id) fresh[g.id] = { ...g };
+  if (myG && Array.isArray(myG.groups)) for (const g of myG.groups) {
+    if (g && g.id) { if (!fresh[g.id]) fresh[g.id] = { ...g }; (owners[g.id] = owners[g.id] || []).push(me); }
+  }
   for (const p of list) {
     if (p.login === me) continue;
     try {
       const d = await readApiFile(p.login, p.repo, 'data/groups.json');
-      if (d && Array.isArray(d.groups)) for (const g of d.groups) if (g && g.id && !fresh[g.id]) fresh[g.id] = { ...g };
+      if (d && Array.isArray(d.groups)) for (const g of d.groups) {
+        if (g && g.id) { if (!fresh[g.id]) fresh[g.id] = { ...g }; (owners[g.id] = owners[g.id] || []).push(p.login); }
+      }
     } catch (e) { }
   }
   // повні метадані (опис, учасники) — з репо АДМІНА: data/groups/<id>.json
@@ -457,12 +463,18 @@ async function refreshGroups() {
   }
   // merge зі старим кешем: локально створені групи не зникають поки CDN не оновиться
   for (const id in groupsCache) if (!fresh[id]) fresh[id] = groupsCache[id];
+  groupRegOwners = owners;
   groupsCache = fresh;
 }
 function myGroups() {
   return Object.values(groupsCache).filter(g => Array.isArray(g.members) ? g.members.includes(me) : g.admin === me);
 }
 function groupMembers(g) {
+  // Загальна група: учасники = адмін + всі, у кого група у СВОЄМУ реєстрі (вступили самі)
+  if (g && g.type === 'public') {
+    const owners = groupRegOwners[g.id] || [];
+    return g.admin ? [...new Set([g.admin, ...owners])] : owners;
+  }
   if (Array.isArray(g.members)) return g.members;
   return g.admin ? [g.admin] : [];
 }
@@ -501,9 +513,9 @@ async function refreshGroupWall() {
   groupLikesCache = likes;
   groupCommentsCache = comments;
 }
-async function createGroup(name, desc, emoji) {
+async function createGroup(name, desc, emoji, type) {
   const id = uid();
-  const g = { id, name, desc: desc || '', emoji: emoji || '👪', admin: me, members: [me], created: Date.now() };
+  const g = { id, name, desc: desc || '', emoji: emoji || '👪', admin: me, members: [me], type: type === 'public' ? 'public' : 'private', created: Date.now() };
   const ok = await writeMyFile('data/groups/' + id + '.json', g);
   if (!ok) { toast('❌ Не вдалося створити групу'); return null; }
   const reg = await readMyFile('data/groups.json', { groups: [] });
@@ -517,10 +529,41 @@ async function joinGroup(id) {
   const g = groupsCache[id];
   if (!g) return;
   if (g.admin === me) return;
-  // заявка на вступ — пишемо адміну у його репо через outbox (адмін побачить у чаті)
+  if (g.type === 'public') {
+    // загальна група — вступ миттєвий: додаємо групу у СВІЙ реєстр (data/groups.json)
+    const reg = await readMyFile('data/groups.json', { groups: [] });
+    reg.groups = reg.groups || [];
+    if (!reg.groups.find(x => x.id === id)) {
+      reg.groups.push({ id, name: g.name, emoji: g.emoji, admin: g.admin, joined: Date.now() });
+      const ok = await writeMyFile('data/groups.json', reg);
+      if (!ok) { toast('❌ Не вдалося вступити'); return false; }
+    }
+    groupRegOwners[id] = [...new Set([...(groupRegOwners[id] || []), me])];
+    groupsCache[id] = { ...g };
+    await refreshGroupWall();
+    renderScreen();
+    toast('✅ Ви у групі «' + g.name + '»');
+    return true;
+  }
+  // приватна група — заявка на вступ: пишемо адміну у його репо через outbox (адмін побачить у чаті)
   const ok = await sendMessage(g.admin, '🙋 Заявка у групу «' + g.name + '»: вступ');
   if (ok) toast('📨 Заявку надіслано адміну (' + g.admin + ')');
   return ok;
+}
+async function leaveGroup(id) {
+  const g = groupsCache[id];
+  if (!g || g.admin === me) return false;
+  if (g.type !== 'public') { toast('Приватну групу можна покинути через адміна'); return false; }
+  const reg = await readMyFile('data/groups.json', { groups: [] });
+  reg.groups = (reg.groups || []).filter(x => x.id !== id);
+  const ok = await writeMyFile('data/groups.json', reg);
+  if (!ok) { toast('❌ Не вдалося вийти'); return false; }
+  groupRegOwners[id] = (groupRegOwners[id] || []).filter(x => x !== me);
+  groupsCache[id] = { ...g };
+  if (currentGroupId === id) { groupWallCache = []; groupLikesCache = []; groupCommentsCache = []; }
+  renderScreen();
+  toast('🚪 Ви вийшли з групи');
+  return true;
 }
 async function addMember(id, login) {
   const g = groupsCache[id];
@@ -954,6 +997,10 @@ function renderGroups() {
       <div class="quick-post">
         ${avatarHtml(me, myProfile.emoji, 'sm')}
         <input class="input" id="g-name-in" placeholder="Назва нової групи..." maxlength="60">
+        <select class="input g-type-sel" id="g-type-sel" title="Тип групи">
+          <option value="private">🔒 Приватна</option>
+          <option value="public">🌍 Загальна</option>
+        </select>
         <button class="btn" onclick="createGroupPrompt()">Створити групу</button>
       </div>
       <div class="err" id="g-create-err"></div>
@@ -973,15 +1020,16 @@ function groupCard(g) {
   return `
     <div class="person" onclick="go('group/' + encodeURIComponent('${g.id}'))">
       <div class="p-avatar g-emoji">${esc(g.emoji || '👪')}</div>
-      <div class="p-name">${esc(g.name)}</div>
-      <div class="offline">${members.length} уч. · ${isMine ? 'я адмін' : 'адмін: ' + esc(g.admin)}</div>
+      <div class="p-name">${esc(g.name)} ${g.type === 'public' ? '🌍' : '🔒'}</div>
+      <div class="offline">${g.type === 'public' ? 'Загальна' : 'Приватна'} · ${members.length} уч. · ${isMine ? 'я адмін' : 'адмін: ' + esc(g.admin)}</div>
     </div>`;
 }
 async function createGroupPrompt() {
   const name = ($('g-name-in') || {}).value || '';
   if (!name.trim()) { $('g-create-err').textContent = 'Вкажіть назву групи'; return; }
   $('g-create-err').textContent = '';
-  const id = await createGroup(name.trim(), '', '👪');
+  const type = ($('g-type-sel') || {}).value === 'public' ? 'public' : 'private';
+  const id = await createGroup(name.trim(), '', '👪', type);
   if (id) go('group/' + encodeURIComponent(id));
 }
 function renderGroup(gid) {
@@ -1001,15 +1049,17 @@ function renderGroup(gid) {
       <div class="profile-head">
         <div class="profile-avatar g-big">${esc(g.emoji || '👪')}</div>
         <div class="profile-info">
-          <div class="profile-name">${esc(g.name)} ${isAdmin ? '<span class="g-admin-badge">адмін</span>' : ''}</div>
+          <div class="profile-name">${esc(g.name)} ${isAdmin ? '<span class="g-admin-badge">адмін</span>' : ''} ${g.type === 'public' ? '<span class="g-admin-badge">🌍 загальна</span>' : '<span class="g-admin-badge">🔒 приватна</span>'}</div>
           <div class="profile-status">${esc(g.desc || '')}</div>
           <div class="profile-dt"><b>Адмін:</b> <a href="#/user/${encodeURIComponent(g.admin)}">${esc(g.admin)}</a></div>
           <div class="profile-dt"><b>Учасники (${members.length}):</b> ${members.map(m => `<a href="#/user/${encodeURIComponent(m)}" class="g-member">${esc(m)}</a>`).join(' ')}</div>
           <div class="btn-row">
-            ${!isMember && !isAdmin ? `<button class="btn" onclick="joinGroup('${g.id}')">🙋 Вступити</button>` : ''}
-            ${isAdmin ? `<button class="btn gray" onclick="toggleGroupAdmin('${g.id}')">⚙️ Керування</button>
-              <button class="btn gray" onclick="toggleGroupEdit('${g.id}')">✏ Редагувати</button>` : ''}
+            ${!isMember && !isAdmin ? `<button class="btn" onclick="joinGroup('${g.id}')">${g.type === 'public' ? '🙋 Вступити' : '🙋 Подати заявку'}</button>` : ''}
+            ${isMember && !isAdmin && g.type === 'public' ? `<button class="btn gray" onclick="leaveGroup('${g.id}')">🚪 Вийти</button>` : ''}
+            ${isAdmin ? `<button class="btn gray" onclick="toggleGroupEdit('${g.id}')">✏ Редагувати</button>` : ''}
+            ${isAdmin && g.type !== 'public' ? `<button class="btn gray" onclick="toggleGroupAdmin('${g.id}')">⚙️ Керування</button>` : ''}
           </div>
+          ${isAdmin && g.type !== 'public' ? `
           <div id="g-admin-panel" class="hidden">
             <div class="set-group-title">Додати учасника</div>
             <div class="quick-post">
@@ -1020,7 +1070,7 @@ function renderGroup(gid) {
             <div class="g-members-admin">
               ${members.filter(m => m !== g.admin).map(m => `<span class="g-member-admin">${esc(m)} <a href="javascript:void(0)" onclick="gRemoveMember('${g.id}','${m}')" title="Видалити">✕</a></span>`).join(' ') || '<div class="empty">Тільки адмін</div>'}
             </div>
-          </div>
+          </div>` : ''}
           <div id="g-edit-panel" class="hidden">
             <div style="height:8px"></div>
             <label>Назва</label>
