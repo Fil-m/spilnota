@@ -252,6 +252,32 @@ async function readFile(owner, repo, path) {
   if (!r.ok) return null;
   return r.json();
 }
+// Чужий файл через Contents API з ETag-кешем: свіжий ОДРАЗУ після PUT,
+// а 304 (не змінився) не витрачає rate limit. raw залишаємо fallback-ом
+// на випадок, коли токен не має доступу до чужого репо.
+// Фікс затримки чату: raw CDN кешує ~5 хв — чужі повідомлення приходили
+// з запізненням у хвилини (симптом «чат працює з затримкою ~8 хв»).
+const apiFileCache = {};
+async function readApiFile(owner, repo, path) {
+  const key = owner + '/' + repo + '/' + path;
+  const headers = {};
+  const hit = apiFileCache[key];
+  if (hit) headers['If-None-Match'] = hit.etag;
+  try {
+    const r = await gh(`/repos/${owner}/${repo}/contents/${path}`, { headers });
+    if (r.status === 304 && hit) return hit.data;
+    // 404 може означати «файлу нема» АБО «токен без доступу до чужого репо»
+    // (GitHub ховає такі запити) — у другому випадку рятує raw (публічне репо).
+    if (r.status === 404) return readFile(owner, repo, path);
+    if (!r.ok) throw new Error(path + ' -> ' + r.status);
+    const d = await r.json();
+    const data = (d && d.content) ? JSON.parse(fromBase64(d.content.replace(/\n/g, ''))) : null;
+    apiFileCache[key] = { etag: r.headers.get('ETag'), data };
+    return data;
+  } catch (e) {
+    return readFile(owner, repo, path);
+  }
+}
 async function readMyFile(path, fallback) {
   try {
     // Свій файл — через Contents API з токеном: raw.githubusercontent.com — CDN з кешем,
@@ -307,7 +333,7 @@ async function refreshWall() {
   for (const p of list) {
     if (p.login === me) continue;
     try {
-      const w = await readFile(p.login, p.repo, 'data/wall.json');
+      const w = await readApiFile(p.login, p.repo, 'data/wall.json');
       if (w && Array.isArray(w.posts)) posts.push(...w.posts.map(x => ({ ...x, repoOwner: p.login })));
     } catch (e) { }
   }
@@ -327,7 +353,7 @@ async function refreshLikes() {
   for (const p of list) {
     if (p.login === me) continue;
     try {
-      const d = await readFile(p.login, p.repo, 'data/likes.json');
+      const d = await readApiFile(p.login, p.repo, 'data/likes.json');
       if (d && Array.isArray(d.likes)) likes.push(...d.likes.map(x => ({ ...x, liker: p.login })));
     } catch (e) { }
   }
@@ -342,7 +368,7 @@ async function refreshComments() {
   for (const p of list) {
     if (p.login === me) continue;
     try {
-      const d = await readFile(p.login, p.repo, 'data/comments.json');
+      const d = await readApiFile(p.login, p.repo, 'data/comments.json');
       if (d && Array.isArray(d.comments)) comments.push(...d.comments.map(x => ({ ...x, author: p.login })));
     } catch (e) { }
   }
@@ -351,7 +377,7 @@ async function refreshComments() {
 async function profileOf(login) {
   if (login === me) return myProfile;
   try {
-    const p = await readFile(login, CONFIG.repoPrefix + login, 'data/profile.json');
+    const p = await readApiFile(login, CONFIG.repoPrefix + login, 'data/profile.json');
     return p || { name: login, emoji: '🙂' };
   } catch (e) { return { name: login, emoji: '🙂' }; }
 }
@@ -372,7 +398,9 @@ async function refreshDialogs() {
   for (const p of list) {
     if (p.login === me) continue;
     try {
-      const msgs = await readFile(p.login, p.repo, 'data/outbox/' + me + '.json');
+      // Чужі повідомлення — через Contents API (ETag/304), НЕ raw CDN:
+      // raw кешує ~5 хв, тому чужі листи приходили з затримкою хвилини.
+      const msgs = await readApiFile(p.login, p.repo, 'data/outbox/' + me + '.json');
       if (Array.isArray(msgs) && msgs.length) fresh[p.login] = [...(fresh[p.login] || []), ...msgs];
     } catch (e) { }
   }
@@ -410,7 +438,7 @@ async function refreshGroups() {
   for (const p of list) {
     if (p.login === me) continue;
     try {
-      const d = await readFile(p.login, p.repo, 'data/groups.json');
+      const d = await readApiFile(p.login, p.repo, 'data/groups.json');
       if (d && Array.isArray(d.groups)) for (const g of d.groups) if (g && g.id && !fresh[g.id]) fresh[g.id] = { ...g };
     } catch (e) { }
   }
@@ -421,7 +449,7 @@ async function refreshGroups() {
     try {
       let full = null;
       if (admin === me) full = await readMyFile('data/groups/' + id + '.json', null);
-      else full = await readFile(admin, CONFIG.repoPrefix + admin, 'data/groups/' + id + '.json');
+      else full = await readApiFile(admin, CONFIG.repoPrefix + admin, 'data/groups/' + id + '.json');
       if (full && full.id) fresh[id] = { ...fresh[id], ...full };
     } catch (e) { }
   }
@@ -452,15 +480,15 @@ async function refreshGroupWall() {
       if (myC && Array.isArray(myC.comments)) comments.push(...myC.comments.map(x => ({ ...x, author: m })));
     } else {
       try {
-        const w = await readFile(m, CONFIG.repoPrefix + m, 'data/gwall/' + gid + '.json');
+        const w = await readApiFile(m, CONFIG.repoPrefix + m, 'data/gwall/' + gid + '.json');
         if (w && Array.isArray(w.posts)) fresh.push(...w.posts.map(x => ({ ...x, repoOwner: m })));
       } catch (e) { }
       try {
-        const l = await readFile(m, CONFIG.repoPrefix + m, 'data/glikes/' + gid + '.json');
+        const l = await readApiFile(m, CONFIG.repoPrefix + m, 'data/glikes/' + gid + '.json');
         if (l && Array.isArray(l.likes)) likes.push(...l.likes.map(x => ({ ...x, liker: m })));
       } catch (e) { }
       try {
-        const c = await readFile(m, CONFIG.repoPrefix + m, 'data/gcomments/' + gid + '.json');
+        const c = await readApiFile(m, CONFIG.repoPrefix + m, 'data/gcomments/' + gid + '.json');
         if (c && Array.isArray(c.comments)) comments.push(...c.comments.map(x => ({ ...x, author: m })));
       } catch (e) { }
     }
@@ -1575,7 +1603,7 @@ async function refreshAvatars() {
   for (const p of list) {
     if (p.login === me) continue;
     try {
-      const prof = await readFile(p.login, p.repo, 'data/profile.json');
+      const prof = await readApiFile(p.login, p.repo, 'data/profile.json');
       if (prof && prof.avatar) avatarsCache[p.login] = prof.avatar;
       else delete avatarsCache[p.login];
     } catch (e) { }
@@ -2100,7 +2128,7 @@ async function tryLogin() {
         body: JSON.stringify({ names: [CONFIG.topic] })
       });
     } catch (e) { }
-    const existingProfile = await readFile(me, repoName, 'data/profile.json');
+    const existingProfile = await readApiFile(me, repoName, 'data/profile.json');
     if (!existingProfile) {
       myProfile = { name: user.name || user.login, emoji: regEmoji, status: '', city: '', about: '', joined: Date.now() };
       await writeMyFile('data/profile.json', myProfile);
