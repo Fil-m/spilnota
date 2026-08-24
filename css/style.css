@@ -510,3 +510,8 @@ a:hover { text-decoration: underline; }
 .ac-count { color: var(--text3); font-size: 12px; white-space: nowrap; }
 .app-cat .people-grid { padding: 0 12px 12px; }
 .mod-ver-sel { max-width: 200px; }
+.app-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; justify-content: center; }
+.app-tag {
+  font-size: 10px; color: var(--link); background: var(--comment-bg);
+  border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px;
+}
