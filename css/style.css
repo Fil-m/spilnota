@@ -474,3 +474,39 @@ a:hover { text-decoration: underline; }
   padding: 2px 8px; font-size: 13px;
 }
 .g-member-admin a { color: #c0392b; font-weight: 700; margin-left: 4px; text-decoration: none; }
+
+/* ---------- Застосунки ---------- */
+.app-card { cursor: pointer; }
+.app-wrap { padding: 0; overflow: hidden; }
+.app-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+}
+.app-title { flex: 1; font-weight: 700; color: var(--text); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app-frame {
+  width: 100%; height: calc(100vh - 190px); min-height: 420px;
+  border: 0; background: #fff; display: block;
+}
+.pop-badge { font-size: 11px; margin-left: 4px; color: #e67e22; }
+.pop-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.pop-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--comment-bg); border: 1px solid var(--border); border-radius: 20px;
+  padding: 5px 12px; font-size: 13px; cursor: pointer; color: var(--text);
+}
+.pop-chip b { color: #e67e22; }
+.pop-chip:hover { border-color: var(--btn-top); }
+.pop-cat { cursor: pointer; }
+.app-cat { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--card); }
+.app-cat summary {
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 10px 14px; user-select: none; list-style: none;
+}
+.app-cat summary::-webkit-details-marker { display: none; }
+.app-cat summary::before { content: '▶'; font-size: 10px; color: var(--text3); transition: transform .15s; }
+.app-cat[open] summary::before { transform: rotate(90deg); }
+.app-cat summary:hover { background: var(--comment-bg); }
+.ac-name { flex: 1; font-weight: 700; color: var(--link); font-size: 14px; }
+.ac-count { color: var(--text3); font-size: 12px; white-space: nowrap; }
+.app-cat .people-grid { padding: 0 12px 12px; }
+.mod-ver-sel { max-width: 200px; }
