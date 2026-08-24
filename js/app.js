@@ -89,7 +89,114 @@ const FONTS = {
   comic: { name: 'Comic Sans', family: "'Comic Sans MS', 'Comic Sans', cursive" }
 };
 
-// ================= МОДУЛІ =================
+// ================= МОДУЛІ СПІЛЬНОТИ (v23): код з чужих репо =================
+// Будь-який учасник може опублікувати код модуля у СВОЄМУ репо (data/modules.json +
+// js/modules/<file>.js). Інші бачать версію в Налаштуваннях → «Модулі спільноти» і можуть
+// перемикатися між базовою і чужими версіями. При КОЖНОМУ перемиканні на чужий код —
+// попередження (код виконується у браузері і бачить токен).
+window.SPILNOTA = {
+  overrides: {},   // id базового модуля -> {name, render, poll, ...}
+  customs: {},     // id нового модуля -> {id, name, icon, desc, screens, render, poll}
+  active: {},      // id -> login автора завантаженого коду
+  register: function (id, def) {
+    if (!id || !def || typeof def !== 'object') return;
+    const isReplace = MODULE_DEFS.some(m => m.id === id);
+    if (isReplace) {
+      SPILNOTA.overrides[id] = { name: def.name || id, ...def };
+    } else {
+      SPILNOTA.customs[id] = { id, icon: def.icon || '🧩', desc: def.desc || '', screens: Array.isArray(def.screens) && def.screens.length ? def.screens : [id], name: def.name || id, ...def };
+    }
+  }
+};
+let modulesCache = []; // декларації модулів: {id, name, desc, file, version, repoOwner, ts}
+let modulesErr = '';
+
+async function refreshModules() {
+  const list = await searchParticipants();
+  const fresh = {};
+  const collect = (d, owner) => {
+    if (!d || !d.id || !d.file) return;
+    const key = d.id + '@' + owner;
+    if (!fresh[key] || (d.ts || 0) > (fresh[key].ts || 0)) fresh[key] = { ...d, repoOwner: owner };
+  };
+  const myM = await readMyFile('data/modules.json', { modules: [] });
+  if (myM && Array.isArray(myM.modules)) for (const d of myM.modules) collect(d, me);
+  for (const p of list) {
+    if (p.login === me) continue;
+    try {
+      const d = await readApiFile(p.login, p.repo, 'data/modules.json');
+      if (d && Array.isArray(d.modules)) for (const x of d.modules) collect(x, p.login);
+    } catch (e) { }
+  }
+  for (const m of modulesCache) { const k = m.id + '@' + m.repoOwner; if (!fresh[k]) fresh[k] = m; }
+  modulesCache = Object.values(fresh).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+}
+// сире читання JS-коду модуля (без JSON.parse): чужий через Contents API з ETag, fallback raw
+async function readApiFileText(owner, repo, path) {
+  const key = owner + '/' + repo + '/' + path;
+  const headers = {};
+  const hit = apiFileCache[key];
+  if (hit) headers['If-None-Match'] = hit.etag;
+  try {
+    const r = await gh(`/repos/${owner}/${repo}/contents/${path}`, { headers });
+    if (r.status === 304 && hit) return hit.text;
+    if (r.status === 404) return readFileText(owner, repo, path);
+    if (!r.ok) throw new Error(path + ' -> ' + r.status);
+    const d = await r.json();
+    const text = (d && d.content) ? fromBase64(d.content.replace(/\n/g, '')) : null;
+    apiFileCache[key] = { etag: r.headers.get('ETag'), text };
+    return text;
+  } catch (e) { return readFileText(owner, repo, path); }
+}
+async function readFileText(owner, repo, path) {
+  try {
+    const r = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/main/${path}`);
+    if (!r.ok) return null;
+    return await r.text();
+  } catch (e) { return null; }
+}
+// Завантажує і ВИКОНУЄ код модуля (код сам реєструється через SPILNOTA.register)
+async function loadModuleCode(decl) {
+  let code = null;
+  try {
+    if (decl.repoOwner === me) {
+      const d = await ghJson('/repos/' + me + '/' + myRepoName() + '/contents/' + decl.file);
+      if (d && d.content) code = fromBase64(d.content.replace(/\n/g, ''));
+    } else {
+      code = await readApiFileText(decl.repoOwner, CONFIG.repoPrefix + decl.repoOwner, decl.file);
+    }
+  } catch (e) { }
+  if (!code) { toast('⚠️ Не вдалося завантажити код модуля «' + (decl.name || decl.id) + '»'); return false; }
+  try {
+    (new Function(code))();
+  } catch (e) {
+    toast('⚠️ Модуль «' + (decl.name || decl.id) + '» помилка: ' + e.message);
+    return false;
+  }
+  SPILNOTA.active[decl.id] = decl.repoOwner;
+  return true;
+}
+// Вимикання чужого коду: прибирає реєстрації, щоб не було «привидів» з минулих завантажень
+function unloadModule(id) {
+  delete SPILNOTA.overrides[id];
+  delete SPILNOTA.customs[id];
+  delete SPILNOTA.active[id];
+}
+// При старті: завантажує збережені у cfg вибори (заміни + увімкнені кастомні)
+async function applyModuleVersions() {
+  const cfg = getCfg();
+  const versions = cfg.moduleVersions || {};
+  for (const id in versions) {
+    const decl = modulesCache.find(d => d.id === id && d.repoOwner === versions[id]);
+    if (decl) await loadModuleCode(decl);
+  }
+  for (const d of modulesCache) {
+    if (SPILNOTA.customs[d.id] || MODULE_DEFS.some(m => m.id === d.id)) continue;
+    if (cfg.enabled[d.id] === true) await loadModuleCode(d);
+  }
+}
+
+// ================= МОДУЛІ (базові) =================
 // Кожен модуль: id, назва, опис, дефолт, список екранів, поллінг
 const MODULE_DEFS = [
   { id: 'profile', name: 'Профіль', icon: '🏠', desc: 'Моя сторінка, редагування, фото-аватар, сторінки користувачів', def: true, screens: ['me', 'edit', 'user', 'avatar'], poll: 'wall' },
@@ -99,6 +206,7 @@ const MODULE_DEFS = [
   { id: 'groups', name: 'Групи', icon: '👪', desc: 'Спільноти за інтересами: своя стіна, учасники, адмін', def: true, screens: ['groups', 'group'], poll: 'groups' },
   { id: 'projects', name: 'Мої проекти', icon: '📁', desc: 'Сторінки та проекти з GitHub: фільтри, описи, приховування', def: true, screens: ['projects'], poll: null },
   { id: 'pages', name: 'Сторінки', icon: '🌐', desc: 'Навігатор задеплоєних сторінок: категорії, описи, порядок', def: true, screens: ['pages'], poll: null },
+  { id: 'apps', name: 'Застосунки', icon: '🧩', desc: 'Каталог застосунків спільноти: ігри та сервіси у вбудові, з передачею ніка', def: true, screens: ['apps', 'app'], poll: 'apps' },
   { id: 'settings', name: 'Налаштування', icon: '⚙️', desc: 'Модулі, шрифт, тема', def: true, screens: ['settings'], poll: null, locked: true }
 ];
 
@@ -133,7 +241,7 @@ const EMOJIS = ['🦊','🐱','🐶','🐻','🐼','🦁','🐸','🐵','🐨','
 function defaultCfg() {
   const enabled = {};
   for (const m of MODULE_DEFS) enabled[m.id] = m.def;
-  return { enabled, font: 'ptsans', theme: 'sunset' };
+  return { enabled, font: 'ptsans', theme: 'sunset', moduleVersions: {} };
 }
 function getCfg() {
   try {
@@ -154,8 +262,12 @@ function saveCfg(cfg) {
 function moduleEnabled(id) {
   const cfg = getCfg();
   const m = MODULE_DEFS.find(x => x.id === id);
-  if (m && m.locked) return true;
-  return cfg.enabled[id] !== false;
+  if (m) {
+    if (m.locked) return true;
+    return cfg.enabled[id] !== false;
+  }
+  // кастомний модуль спільноти — тільки ЯВНЕ увімкнення
+  return cfg.enabled[id] === true;
 }
 function applyTheme(themeId) {
   const t = THEMES[themeId] || THEMES.classic;
@@ -666,34 +778,41 @@ function parseHash() {
 }
 function go(url) { location.hash = url; }
 function moduleOfScreen(screen) {
-  return MODULE_DEFS.find(m => m.screens.includes(screen));
+  const m = MODULE_DEFS.find(m => m.screens.includes(screen));
+  if (m) return m;
+  for (const id in SPILNOTA.customs) {
+    const c = SPILNOTA.customs[id];
+    if ((c.screens || []).includes(screen)) return { id, name: c.name, icon: c.icon, screens: c.screens, custom: true };
+  }
+  return null;
 }
 function firstEnabledScreen() {
-  const m = MODULE_DEFS.find(x => moduleEnabled(x.id));
-  return m ? m.screens[0] : 'settings';
+  for (const m of MODULE_DEFS) if (moduleEnabled(m.id)) return m.screens[0];
+  for (const id in SPILNOTA.customs) if (moduleEnabled(id)) return SPILNOTA.customs[id].screens[0];
+  return 'settings';
 }
 
 // ================= РЕНДЕР =================
 const CONTENT = () => $('content');
 function currentSig(screen) {
   return screen + '|' + wallCache.posts.length + '|' + Object.keys(dialogsCache).length + '|' + unreadCount()
-    + '|' + Object.keys(groupsCache).length + '|' + groupWallCache.length;
+    + '|' + Object.keys(groupsCache).length + '|' + groupWallCache.length + '|' + appsCache.length + '|' + modulesCache.length;
 }
 function renderNav() {
   const { screen } = parseHash();
   const cfg = getCfg();
+  const customDefs = Object.values(SPILNOTA.customs).filter(m => moduleEnabled(m.id));
+  const menuDefs = [...MODULE_DEFS.filter(m => moduleEnabled(m.id)), ...customDefs];
   // ліве меню
   const menu = $('sidebar').querySelector('.menu');
-  menu.innerHTML = MODULE_DEFS
-    .filter(m => moduleEnabled(m.id))
+  menu.innerHTML = menuDefs
     .map(m => {
       const counter = m.id === 'chat' && unreadCount() ? `<span class="counter">${unreadCount()}</span>` : '';
       return `<li><a href="#/${m.screens[0]}" data-nav="${m.id}" class="${m.screens.includes(screen) ? 'active' : ''}"><span class="mi">${m.icon}</span> ${m.name}${counter}</a></li>`;
     }).join('');
   // нижня навігація
   const bn = $('bottom-nav');
-  bn.innerHTML = MODULE_DEFS
-    .filter(m => moduleEnabled(m.id))
+  bn.innerHTML = menuDefs
     .map(m => `<a href="#/${m.screens[0]}" data-nav="${m.id}" class="${m.screens.includes(screen) ? 'active' : ''}">${m.icon}<br><small>${m.name.replace(/ \(.*/, '')}</small></a>`)
     .join('');
   document.querySelectorAll('[data-nav]').forEach(el => {
@@ -705,6 +824,21 @@ function renderScreen() {
   if (!me) { renderAuthGate(); return; }
   const mod = moduleOfScreen(screen);
   if (!mod || !moduleEnabled(mod.id)) { go(firstEnabledScreen()); return; }
+  // заміна базового модуля чужим кодом (v23)
+  const baseMod = MODULE_DEFS.find(m => m.screens.includes(screen));
+  if (baseMod && SPILNOTA.overrides[baseMod.id] && typeof SPILNOTA.overrides[baseMod.id].render === 'function') {
+    SPILNOTA.overrides[baseMod.id].render(screen, param);
+    renderNav(); drawAvatars(); loadScEmbeds();
+    lastRenderSig = currentSig(screen);
+    return;
+  }
+  // новий кастомний модуль (v23)
+  if (mod.custom && SPILNOTA.customs[mod.id] && typeof SPILNOTA.customs[mod.id].render === 'function') {
+    SPILNOTA.customs[mod.id].render(screen, param);
+    renderNav(); drawAvatars(); loadScEmbeds();
+    lastRenderSig = currentSig(screen);
+    return;
+  }
   switch (screen) {
     case 'me': renderMyPage(); break;
     case 'edit': renderEdit(); break;
@@ -716,6 +850,8 @@ function renderScreen() {
     case 'group': renderGroup(param); break;
     case 'projects': renderProjects(); break;
     case 'pages': renderPages(); break;
+    case 'apps': renderApps(); break;
+    case 'app': renderApp(param); break;
     case 'avatar': renderAvatar(); break;
     case 'user': renderUserPage(param); break;
     case 'settings': renderSettings(); break;
@@ -1339,6 +1475,198 @@ function fmtProjTime(ts) {
   if (d.getFullYear() === n.getFullYear()) return d.getDate() + ' ' + MONTHS[d.getMonth()];
   return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
 }
+
+// ================= ЗАСТОСУНКИ (каталог + вбудова) =================
+// Каталог застосунків спільноти: кожен учасник тримає data/apps.json у своєму репо.
+// Вбудова — iframe всередині Спільноти; через postMessage застосунку передається ТІЛЬКИ нік (токен — ніколи).
+let appsCache = [];
+let appsErr = '';
+
+// Стартовий каталог — сіється кнопкою «⚡ Завантажити стартовий каталог» у СВІЙ репо (через токен юзера)
+const DEFAULT_APPS = [
+  { name: 'Спільнота', icon: '🏘️', url: 'https://fil-m.github.io/spilnota/', desc: 'Сама Спільнота: стіна, діалоги, групи, люди', cat: 'Спільнота' },
+  { name: 'Шлях Потоку', icon: '🌊', url: 'https://fil-m.github.io/flow-path/', desc: 'Релігія процесу: доктрина, свідомість, продовження', cat: 'Духовне' },
+  { name: 'FLOW-візуали', icon: '🎨', url: 'https://flow-visuals.116-203-217-173.sslip.io/', desc: 'Каталог тез і текстів роликів з тегами для TikTok', cat: 'Контент' },
+  { name: 'ReGo', icon: '🎮', url: 'https://fil-m.github.io/ReGo/', desc: '3D-шутер: SYNERGY PHASE SHIFT, мультиплеєр', cat: 'Ігри' },
+  { name: 'CONTEXT', icon: '🧲', url: 'https://fil-m.github.io/context/', desc: 'Головоломка про тіло: збірка рухом, довгий тап — розібрати', cat: 'Ігри' },
+  { name: 'Анімаційна майстерня', icon: '🎬', url: 'https://fil-m.github.io/animation-workshop/', desc: 'Stop-motion майстерня для батьків і дітей у Карлсруе', cat: 'Студія' },
+  { name: 'Дитячі ігри', icon: '🎲', url: 'https://fil-m.github.io/kids-games/', desc: 'Абетка, цифри, рахунок, кольори — навчання через гру', cat: 'Ігри' },
+  { name: 'Akira', icon: '🧮', url: 'https://fil-m.github.io/akira-mental-math/', desc: 'Ментальна арифметика на абакусі: генератор вправ', cat: 'Навчання' },
+  { name: 'Портфоліо', icon: '👤', url: 'https://fil-m.github.io/portfolio-page/', desc: 'Тарас Москаленко — Людина. Творець.', cat: 'Персональне' }
+];
+async function seedCatalog() {
+  const data = await readMyFile('data/apps.json', { apps: [] });
+  if (!Array.isArray(data.apps)) data.apps = [];
+  const have = new Set(data.apps.map(a => String(a.url || '').replace(/\/$/, '')));
+  const now = Date.now();
+  let added = 0;
+  for (const d of DEFAULT_APPS) {
+    const url = String(d.url).replace(/\/$/, '');
+    if (have.has(url)) continue;
+    data.apps.push({ id: 'app-' + uid(), name: d.name, url: d.url, icon: d.icon, desc: d.desc, cat: d.cat || '', ts: now + added });
+    added++;
+  }
+  if (!added) { toast('Каталог уже заповнено'); return; }
+  const ok = await writeMyFile('data/apps.json', data);
+  if (ok) { await refreshApps(); toast('🧩 Стартовий каталог завантажено (' + added + ')!'); }
+  else appsErr = 'Не вдалося зберегти (перевірте токен)';
+  renderApps();
+}
+
+async function refreshApps() {
+  const list = await searchParticipants();
+  const fresh = {};   // normUrl -> кращий запис
+  const owners = {};  // normUrl -> Set(login) — для популярності
+  const collect = (a, owner) => {
+    if (!a || !a.id || !a.url) return;
+    const norm = String(a.url).replace(/\/$/, '');
+    (owners[norm] = owners[norm] || new Set()).add(owner);
+    if (!fresh[norm] || (a.ts || 0) > (fresh[norm].ts || 0)) fresh[norm] = { ...a, url: norm, repoOwner: owner };
+  };
+  const myA = await readMyFile('data/apps.json', { apps: [] });
+  if (myA && Array.isArray(myA.apps)) for (const a of myA.apps) collect(a, me);
+  for (const p of list) {
+    if (p.login === me) continue;
+    try {
+      const d = await readApiFile(p.login, p.repo, 'data/apps.json');
+      if (d && Array.isArray(d.apps)) for (const a of d.apps) collect(a, p.login);
+    } catch (e) { }
+  }
+  // merge зі старим кешем — щойно доданий застосунок не зникає поки CDN не оновиться
+  for (const a of appsCache) { const norm = String(a.url).replace(/\/$/, ''); if (!fresh[norm]) fresh[norm] = a; }
+  appsCache = Object.values(fresh).map(a => {
+    const norm = String(a.url).replace(/\/$/, '');
+    const n = (owners[norm] || new Set([a.repoOwner])).size;
+    return { ...a, pop: Math.max(n, a.pop || 1) };
+  });
+  appsCache.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+}
+async function addApp() {
+  const name = ($('ap-name') || {}).value || '';
+  const url = ($('ap-url') || {}).value || '';
+  const icon = ($('ap-icon') || {}).value || '🧩';
+  const desc = ($('ap-desc') || {}).value || '';
+  const cat = ($('ap-cat') || {}).value || '';
+  if (!name.trim() || !url.trim()) { appsErr = 'Вкажіть назву і посилання'; renderApps(); return; }
+  let u;
+  try { u = new URL(url.trim()); } catch (e) { appsErr = 'Неправильне посилання'; renderApps(); return; }
+  if (u.protocol !== 'https:') { appsErr = 'Дозволені тільки https:// посилання'; renderApps(); return; }
+  appsErr = '';
+  const id = 'app-' + uid();
+  const data = await readMyFile('data/apps.json', { apps: [] });
+  if (!Array.isArray(data.apps)) data.apps = [];
+  data.apps.push({ id, name: name.trim().slice(0, 60), url: u.href, icon: icon.trim().slice(0, 4) || '🧩', desc: desc.trim().slice(0, 300), cat: cat.trim().slice(0, 40), ts: Date.now() });
+  const ok = await writeMyFile('data/apps.json', data);
+  if (ok) { await refreshApps(); toast('🧩 Застосунок додано!'); }
+  else { appsErr = 'Не вдалося зберегти (перевірте токен)'; }
+  renderApps();
+}
+function appCard(a) {
+  const pop = (a.pop || 1) > 1 ? `<span class="pop-badge">🔥${a.pop}</span>` : '';
+  return `
+    <div class="person app-card" onclick="go('app/' + encodeURIComponent('${a.id}'))">
+      <div class="p-avatar g-emoji">${esc(a.icon || '🧩')}</div>
+      <div class="p-name">${esc(a.name)}${pop}</div>
+      <div class="offline">${esc(a.desc || '')}${a.repoOwner ? '<br>➕ ' + esc(a.repoOwner) : ''}</div>
+    </div>`;
+}
+// групування за категоріями; сортування категорій за популярністю (сума 🔥), потім за кількістю
+function appCats() {
+  const map = {};
+  for (const a of appsCache) {
+    const c = (a.cat || '').trim() || 'Без категорії';
+    (map[c] = map[c] || []).push(a);
+  }
+  return Object.entries(map)
+    .map(([name, apps]) => ({ name, apps, pop: apps.reduce((s, a) => s + (a.pop || 1), 0) }))
+    .sort((x, y) => y.pop - x.pop || y.apps.length - x.apps.length);
+}
+function openCat(name) {
+  const d = document.querySelector(`details.app-cat[data-cat="${CSS.escape(name)}"]`);
+  if (d) d.open = true;
+}
+function renderApps() {
+  const cats = appCats();
+  const topApps = [...appsCache].sort((a, b) => (b.pop || 1) - (a.pop || 1)).slice(0, 3);
+  const topCats = [...cats].sort((a, b) => b.pop - a.pop).slice(0, 3);
+  const catNames = cats.map(c => c.name);
+  CONTENT().innerHTML = `
+    <div class="card">
+      <div class="card-title">🧩 Застосунки</div>
+      <div class="set-desc">Сайти спільноти відкриваються всередині Спільноти. Застосунок бачить твій нік — токен не передається ніколи.</div>
+      ${appsCache.some(a => a.repoOwner === me) ? '' : '<button class="btn" style="margin-bottom:10px" onclick="seedCatalog()">⚡ Завантажити стартовий каталог</button>'}
+      <div class="quick-post">
+        ${avatarHtml(me, myProfile.emoji, 'sm')}
+        <input class="input" id="ap-name" placeholder="Назва застосунку..." maxlength="60">
+        <input class="input" id="ap-url" placeholder="https://... (посилання)" maxlength="200">
+      </div>
+      <div class="quick-post">
+        <input class="input" id="ap-cat" list="ap-cats-list" placeholder="Категорія (вибрати або нова)..." maxlength="40">
+        <datalist id="ap-cats-list">${catNames.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+        <input class="input" id="ap-icon" placeholder="Іконка" maxlength="4" style="max-width:90px">
+        <input class="input" id="ap-desc" placeholder="Опис..." maxlength="300">
+        <button class="btn" onclick="addApp()">➕ Додати</button>
+      </div>
+      <div class="err" id="ap-err">${esc(appsErr)}</div>
+    </div>
+    ${appsCache.length ? `
+    <div class="card">
+      <div class="card-title">🔥 Популярне в спільноті</div>
+      <div class="pop-row">${topApps.map(a => `<span class="pop-chip" onclick="go('app/' + encodeURIComponent('${a.id}'))">${esc(a.icon || '🧩')} ${esc(a.name)} <b>${a.pop || 1}</b></span>`).join('')}</div>
+      <div class="pop-row">${topCats.map(c => `<span class="pop-chip pop-cat" onclick="openCat('${esc(c.name.replace(/'/g, "\\'"))}')">📂 ${esc(c.name)} <b>${c.pop}</b></span>`).join('')}</div>
+      <div class="set-desc" style="font-size:11px">🔥 = скільки учасників додали собі</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Каталог за категоріями</div>
+      ${cats.map((c, i) => `
+      <details class="app-cat" data-cat="${esc(c.name)}" ${i === 0 ? 'open' : ''}>
+        <summary><span class="ac-name">📂 ${esc(c.name)}</span><span class="ac-count">${c.apps.length} · 🔥${c.pop}</span></summary>
+        <div class="people-grid">${c.apps.map(appCard).join('')}</div>
+      </details>`).join('')}
+    </div>` : '<div class="card"><div class="empty">Каталог порожній. Додайте перший застосунок!</div></div>'}`;
+}
+function renderApp(id) {
+  const a = appsCache.find(x => x.id === id);
+  if (!a) {
+    CONTENT().innerHTML = `<div class="card"><div class="card-title">Застосунок</div><div class="empty">Завантаження застосунку...</div></div>`;
+    refreshApps().then(() => renderScreen());
+    return;
+  }
+  CONTENT().innerHTML = `
+    <div class="card app-wrap">
+      <div class="app-bar">
+        <button class="btn gray" onclick="go('apps')">← Назад</button>
+        <span class="app-title">${esc(a.icon || '🧩')} ${esc(a.name)}</span>
+        <a class="btn gray" href="${esc(a.url)}" target="_blank" rel="noopener">↗ Відкрити</a>
+      </div>
+      <div id="app-frame-slot"></div>
+    </div>`;
+  // iframe створюємо через createElement і підписуємось на load ДО встановлення src —
+  // інакше швидке завантаження може статись до підписки і нік не передасться
+  const slot = $('app-frame-slot');
+  const f = document.createElement('iframe');
+  f.className = 'app-frame';
+  f.id = 'app-frame';
+  f.allow = 'fullscreen; autoplay; encrypted-media';
+  f.setAttribute('allowfullscreen', '');
+  f.referrerPolicy = 'no-referrer';
+  f.addEventListener('load', () => sendAppUser(f));
+  f.src = a.url;
+  slot.appendChild(f);
+}
+// Передача ніка застосунку через postMessage. ТОКЕН НІКОЛИ НЕ ПЕРЕДАЄМО — тільки login/ім'я.
+function sendAppUser(frame) {
+  try {
+    frame.contentWindow.postMessage({ type: 'spilnota', action: 'user', login: me, name: myProfile.name || me, emoji: myProfile.emoji || '' }, '*');
+  } catch (e) { }
+}
+// Застосунок може сам попросити дані: шле {type:'spilnota', action:'hello'} — відповідаємо.
+window.addEventListener('message', (ev) => {
+  if (!me || !ev.data || ev.data.type !== 'spilnota') return;
+  const f = $('app-frame');
+  if (!f || ev.source !== f.contentWindow) return;
+  if (ev.data.action === 'hello') sendAppUser(f);
+});
 
 // ================= СТОРІНКИ (навігатор) =================
 // Категорії та прикріплення зберігаються у data/pages.json (репо юзера)
@@ -2032,6 +2360,11 @@ function renderSettings() {
       </div>
 
       <div class="set-group">
+        <div class="set-group-title">Модулі спільноти (чужі версії)</div>
+        ${renderCommunityModules()}
+      </div>
+
+      <div class="set-group">
         <div class="set-group-title">Шрифт</div>
         <div class="font-options">
           ${Object.entries(FONTS).map(([id, f]) => `
@@ -2083,6 +2416,109 @@ function toggleModule(id, on) {
   renderScreen();
   toast(on ? '✅ Модуль увімкнено' : '⏻ Модуль вимкнено');
 }
+// ================= МОДУЛІ СПІЛЬНОТИ: налаштування =================
+// Секція «Модулі спільноти»: заміни базових модулів (select) і нові кастомні (перемикач).
+// Попередження показується при КОЖНОМУ переході на чужий код (навіть якщо вже вмикав раніше).
+function renderCommunityModules() {
+  const cfg = getCfg();
+  if (!modulesCache.length) return '<div class="set-desc">Поки ніхто не опублікував свій код. Якщо учасник додасть модуль у свій репо — версія з\'явиться тут.</div>';
+  const byId = {};
+  for (const d of modulesCache) (byId[d.id] = byId[d.id] || []).push(d);
+  const repl = Object.keys(byId).filter(id => MODULE_DEFS.some(m => m.id === id));
+  const fresh = Object.keys(byId).filter(id => !MODULE_DEFS.some(m => m.id === id));
+  let html = '';
+  if (repl.length) {
+    html += repl.map(id => {
+      const base = MODULE_DEFS.find(m => m.id === id);
+      const versions = byId[id];
+      const cur = cfg.moduleVersions[id] || '';
+      return `
+      <div class="set-row">
+        <div class="set-info">
+          <div class="set-name">${base.icon} ${base.name} — версія</div>
+          <div class="set-desc">${versions.map(v => `від <b>${esc(v.repoOwner)}</b> (v${esc(v.version || '?')}): ${esc(v.desc || v.name || '')}`).join('<br>')}</div>
+        </div>
+        <select class="input mod-ver-sel" onchange="pickModuleVersion('${id}', this.value)">
+          <option value="" ${cur === '' ? 'selected' : ''}>Базова</option>
+          ${versions.map(v => `<option value="${esc(v.repoOwner)}" ${cur === v.repoOwner ? 'selected' : ''}>${esc(v.repoOwner)} v${esc(v.version || '?')}</option>`).join('')}
+        </select>
+      </div>`;
+    }).join('');
+  }
+  if (fresh.length) {
+    html += fresh.map(id => {
+      const v = byId[id][0];
+      const on = cfg.enabled[id] === true;
+      return `
+      <div class="set-row">
+        <div class="set-info">
+          <div class="set-name">${esc(v.icon || '🧩')} ${esc(v.name || id)} <small style="color:var(--text3)">від ${esc(v.repoOwner)}</small></div>
+          <div class="set-desc">${esc(v.desc || '')}</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" ${on ? 'checked' : ''} onchange="toggleCustomModule('${id}', this.checked)">
+          <span class="slider"></span>
+        </label>
+      </div>`;
+    }).join('');
+  }
+  html += '<div class="set-desc" style="margin-top:6px">⚠️ Чужий код виконується у твоєму браузері і бачить твій токен. Підтвердження питається при кожному переході.</div>';
+  return html;
+}
+// Перемикання версії базового модуля. value = login автора або '' (базова).
+function pickModuleVersion(id, value) {
+  const base = MODULE_DEFS.find(m => m.id === id);
+  const baseName = (base || {}).name || id;
+  if (value === '') {
+    unloadModule(id);
+    const cfg = getCfg();
+    delete cfg.moduleVersions[id];
+    saveCfg(cfg);
+    toast('↩ ' + baseName + ': базова версія');
+    renderScreen();
+    renderSettings();
+    return;
+  }
+  const decl = modulesCache.find(d => d.id === id && d.repoOwner === value);
+  if (!decl) return;
+  const ok = confirm('⚠️ УВАГА: ти перемикаєш «' + baseName + '» на версію від ' + value + ' (v' + (decl.version || '?') + ').\n\nКод цього модуля виконуватиметься у ТВОЄМУ браузері і матиме доступ до твого токена GitHub. Вмикай, тільки якщо довіряєш автору.\n\nПродовжити?');
+  if (!ok) { renderSettings(); return; }
+  loadModuleCode(decl).then(loaded => {
+    if (!loaded) { renderSettings(); return; }
+    const cfg = getCfg();
+    cfg.moduleVersions[id] = value;
+    saveCfg(cfg);
+    toast('✅ ' + baseName + ': ' + value + ' v' + (decl.version || '?'));
+    renderScreen();
+    renderSettings();
+  });
+}
+// Увімкнення/вимкнення НОВОГО кастомного модуля (не заміна базового)
+function toggleCustomModule(id, checked) {
+  const decl = modulesCache.find(d => d.id === id);
+  if (checked) {
+    if (!decl) return;
+    const ok = confirm('⚠️ УВАГА: ти вмикаєш модуль «' + (decl.name || id) + '» від ' + decl.repoOwner + '.\n\nКод цього модуля виконуватиметься у ТВОЄМУ браузері і матиме доступ до твого токена GitHub. Вмикай, тільки якщо довіряєш автору.\n\nПродовжити?');
+    if (!ok) { renderSettings(); return; }
+    loadModuleCode(decl).then(loaded => {
+      if (!loaded) { renderSettings(); return; }
+      const cfg = getCfg();
+      cfg.enabled[id] = true;
+      saveCfg(cfg);
+      toast('✅ Модуль «' + (decl.name || id) + '» увімкнено');
+      renderScreen();
+      renderSettings();
+    });
+  } else {
+    unloadModule(id);
+    const cfg = getCfg();
+    cfg.enabled[id] = false;
+    saveCfg(cfg);
+    toast('⏻ Модуль вимкнено');
+    renderScreen();
+    renderSettings();
+  }
+}
 function setFont(id) {
   const cfg = getCfg();
   cfg.font = id;
@@ -2115,12 +2551,19 @@ function startPolling() {
     if (!mod || !moduleEnabled(mod.id)) return;
     try {
       await searchParticipants();
-      if (mod.poll === 'wall' || screen === 'me' || screen === 'user') await refreshWall();
-      if (mod.poll === 'dialogs' || screen === 'messages') await refreshDialogs();
-      if (mod.poll === 'groups' || screen === 'groups' || screen === 'group') {
-        await refreshGroups();
-        if (screen === 'group') await refreshGroupWall();
+      const ov = (mod.custom ? SPILNOTA.customs[mod.id] : SPILNOTA.overrides[mod.id]) || null;
+      if (ov && typeof ov.poll === 'function') {
+        await ov.poll();
+      } else {
+        if (mod.poll === 'wall' || screen === 'me' || screen === 'user') await refreshWall();
+        if (mod.poll === 'dialogs' || screen === 'messages') await refreshDialogs();
+        if (mod.poll === 'groups' || screen === 'groups' || screen === 'group') {
+          await refreshGroups();
+          if (screen === 'group') await refreshGroupWall();
+        }
+        if (mod.poll === 'apps' || screen === 'apps' || screen === 'app') await refreshApps();
       }
+      if (screen === 'settings') await refreshModules();
       const sig = currentSig(screen);
       if (sig !== lastRenderSig) { lastRenderSig = sig; renderScreen(); }
       else renderNav();
@@ -2319,7 +2762,7 @@ async function finishRegistration() {
 // ================= СТАРТ =================
 async function refreshAll() {
   await searchParticipants(true);
-  await Promise.all([refreshWall(), refreshLikes(), refreshComments(), refreshDialogs(), loadMyProfile(), refreshAvatars(), refreshGroups()]);
+  await Promise.all([refreshWall(), refreshLikes(), refreshComments(), refreshDialogs(), loadMyProfile(), refreshAvatars(), refreshGroups(), refreshApps(), refreshModules()]);
 }
 function renderHeader() {
   const hu = $('header-user');
@@ -2349,6 +2792,7 @@ async function init() {
   } else {
     renderHeader();
     await refreshAll();
+    await applyModuleVersions();
     renderScreen();
     startPolling();
   }
@@ -2359,6 +2803,8 @@ async function init() {
     if (!mod || !moduleEnabled(mod.id)) { go(firstEnabledScreen()); return; }
     if (screen === 'dialog') { refreshDialogs().then(() => renderScreen()); }
     else if (screen === 'group') { refreshGroups().then(() => refreshGroupWall()).then(() => renderScreen()); }
+    else if (screen === 'app') { refreshApps().then(() => renderScreen()); }
+    else if (screen === 'settings') { refreshModules().then(() => renderScreen()); }
     else renderScreen();
   });
 }
