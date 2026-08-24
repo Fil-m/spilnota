@@ -796,7 +796,7 @@ function firstEnabledScreen() {
 const CONTENT = () => $('content');
 function currentSig(screen) {
   return screen + '|' + wallCache.posts.length + '|' + Object.keys(dialogsCache).length + '|' + unreadCount()
-    + '|' + Object.keys(groupsCache).length + '|' + groupWallCache.length + '|' + appsCache.length + '|' + modulesCache.length;
+    + '|' + Object.keys(groupsCache).length + '|' + groupWallCache.length + '|' + appsCache.length + '|' + modulesCache.length + '|' + Object.keys(appPageCats).length + '|' + Object.keys(appPageOwners).length;
 }
 function renderNav() {
   const { screen } = parseHash();
@@ -1476,109 +1476,122 @@ function fmtProjTime(ts) {
   return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
 }
 
-// ================= ЗАСТОСУНКИ (каталог + вбудова) =================
-// Каталог застосунків спільноти: кожен учасник тримає data/apps.json у своєму репо.
-// Вбудова — iframe всередині Спільноти; через postMessage застосунку передається ТІЛЬКИ нік (токен — ніколи).
+// ================= ЗАСТОСУНКИ (каталог = сторінки учасників + вбудова) =================
+// Застосунок = задеплоєна сторінка (GitHub Pages) будь-якого учасника. Нічого додавати не треба:
+// каталог збирається АВТОМАТИЧНО зі сторінок усіх учасників. Категорії — з навігатора
+// «Сторінки» (data/pages.json кожного: які сторінки до яких категорій прикріплені).
+// Популярність 🔥 = скільки учасників прикріпили цю сторінку до категорій.
+// Вбудова — iframe всередині Спільноти; через postMessage передається ТІЛЬКИ нік (токен — ніколи).
 let appsCache = [];
-let appsErr = '';
+let appPageCats = {};   // repoName -> [catName...]
+let appPageOwners = {};  // repoName -> Set(login) — хто прикріпив (для популярності)
+let memberPagesCache = {}; // login -> {ts, pages}
 
-// Стартовий каталог — сіється кнопкою «⚡ Завантажити стартовий каталог» у СВІЙ репо (через токен юзера)
-const DEFAULT_APPS = [
-  { name: 'Спільнота', icon: '🏘️', url: 'https://fil-m.github.io/spilnota/', desc: 'Сама Спільнота: стіна, діалоги, групи, люди', cat: 'Спільнота' },
-  { name: 'Шлях Потоку', icon: '🌊', url: 'https://fil-m.github.io/flow-path/', desc: 'Релігія процесу: доктрина, свідомість, продовження', cat: 'Духовне' },
-  { name: 'FLOW-візуали', icon: '🎨', url: 'https://flow-visuals.116-203-217-173.sslip.io/', desc: 'Каталог тез і текстів роликів з тегами для TikTok', cat: 'Контент' },
-  { name: 'ReGo', icon: '🎮', url: 'https://fil-m.github.io/ReGo/', desc: '3D-шутер: SYNERGY PHASE SHIFT, мультиплеєр', cat: 'Ігри' },
-  { name: 'CONTEXT', icon: '🧲', url: 'https://fil-m.github.io/context/', desc: 'Головоломка про тіло: збірка рухом, довгий тап — розібрати', cat: 'Ігри' },
-  { name: 'Анімаційна майстерня', icon: '🎬', url: 'https://fil-m.github.io/animation-workshop/', desc: 'Stop-motion майстерня для батьків і дітей у Карлсруе', cat: 'Студія' },
-  { name: 'Дитячі ігри', icon: '🎲', url: 'https://fil-m.github.io/kids-games/', desc: 'Абетка, цифри, рахунок, кольори — навчання через гру', cat: 'Ігри' },
-  { name: 'Akira', icon: '🧮', url: 'https://fil-m.github.io/akira-mental-math/', desc: 'Ментальна арифметика на абакусі: генератор вправ', cat: 'Навчання' },
-  { name: 'Портфоліо', icon: '👤', url: 'https://fil-m.github.io/portfolio-page/', desc: 'Тарас Москаленко — Людина. Творець.', cat: 'Персональне' }
-];
-async function seedCatalog() {
-  const data = await readMyFile('data/apps.json', { apps: [] });
-  if (!Array.isArray(data.apps)) data.apps = [];
-  const have = new Set(data.apps.map(a => String(a.url || '').replace(/\/$/, '')));
-  const now = Date.now();
-  let added = 0;
-  for (const d of DEFAULT_APPS) {
-    const url = String(d.url).replace(/\/$/, '');
-    if (have.has(url)) continue;
-    data.apps.push({ id: 'app-' + uid(), name: d.name, url: d.url, icon: d.icon, desc: d.desc, cat: d.cat || '', ts: now + added });
-    added++;
-  }
-  if (!added) { toast('Каталог уже заповнено'); return; }
-  const ok = await writeMyFile('data/apps.json', data);
-  if (ok) { await refreshApps(); toast('🧩 Стартовий каталог завантажено (' + added + ')!'); }
-  else appsErr = 'Не вдалося зберегти (перевірте токен)';
-  renderApps();
+// Сторінки учасника: свої через projectsCache, чужі через публічні репо (кеш 5 хв)
+async function memberPages(login) {
+  const c = memberPagesCache[login];
+  if (c && Date.now() - c.ts < CONFIG.searchMs) return c.pages;
+  let repos = null;
+  try {
+    if (login === me) {
+      repos = await fetchProjects();
+    } else {
+      const r = await ghJson('/users/' + encodeURIComponent(login) + '/repos?per_page=100&sort=updated');
+      repos = Array.isArray(r) ? r : null;
+    }
+  } catch (e) { repos = null; }
+  const pages = (Array.isArray(repos) ? repos : [])
+    .filter(p => !p.fork && (p.has_pages || (p.page && /github\.io/.test(p.page))))
+    .map(p => ({
+      id: 'pg-' + login + '-' + p.name,
+      name: p.name,
+      url: p.page || ('https://' + login + '.github.io/' + p.name + '/'),
+      desc: p.desc || p.description || '',
+      lang: p.lang || p.language || '',
+      repo: p.name,
+      repoOwner: login
+    }));
+  memberPagesCache[login] = { ts: Date.now(), pages };
+  return pages;
 }
-
 async function refreshApps() {
   const list = await searchParticipants();
-  const fresh = {};   // normUrl -> кращий запис
-  const owners = {};  // normUrl -> Set(login) — для популярності
-  const collect = (a, owner) => {
-    if (!a || !a.id || !a.url) return;
-    const norm = String(a.url).replace(/\/$/, '');
-    (owners[norm] = owners[norm] || new Set()).add(owner);
-    if (!fresh[norm] || (a.ts || 0) > (fresh[norm].ts || 0)) fresh[norm] = { ...a, url: norm, repoOwner: owner };
+  const fresh = {};   // normUrl -> запис
+  for (const p of list) {
+    try {
+      const pages = await memberPages(p.login);
+      for (const pg of pages) {
+        const norm = pg.url.replace(/\/$/, '');
+        if (!fresh[norm]) fresh[norm] = { ...pg, url: norm, repoOwner: p.login };
+      }
+    } catch (e) { }
+  }
+  // merge зі старим кешем — щойно задеплоєна сторінка не зникає поки CDN не оновиться
+  for (const a of appsCache) { const norm = String(a.url).replace(/\/$/, ''); if (!fresh[norm]) fresh[norm] = a; }
+  appsCache = Object.values(fresh);
+  appsCache.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+// Категорії — з data/pages.json учасників (їх навігатор «Сторінки»).
+// appPageOwners: repoName -> Set(login) — хто прикріпив сторінку до категорій (популярність).
+async function refreshAppCats() {
+  const list = await searchParticipants();
+  const pageCats = {};
+  const pageOwners = {};
+  const collect = (pd, owner) => {
+    if (!pd || !Array.isArray(pd.categories)) return;
+    for (const c of pd.categories) {
+      if (!c || !c.name || !Array.isArray(c.pages)) continue;
+      const cn = String(c.name).trim();
+      if (!cn) continue;
+      for (const rn of c.pages) {
+        if (!rn) continue;
+        const key = String(rn);
+        (pageCats[key] = pageCats[key] || new Set()).add(cn);
+        (pageOwners[key] = pageOwners[key] || new Set()).add(owner);
+      }
+    }
   };
-  const myA = await readMyFile('data/apps.json', { apps: [] });
-  if (myA && Array.isArray(myA.apps)) for (const a of myA.apps) collect(a, me);
+  const myP = await readMyFile('data/pages.json', null);
+  if (myP) collect(myP, me);
   for (const p of list) {
     if (p.login === me) continue;
     try {
-      const d = await readApiFile(p.login, p.repo, 'data/apps.json');
-      if (d && Array.isArray(d.apps)) for (const a of d.apps) collect(a, p.login);
+      const d = await readApiFile(p.login, p.repo, 'data/pages.json');
+      if (d) collect(d, p.login);
     } catch (e) { }
   }
-  // merge зі старим кешем — щойно доданий застосунок не зникає поки CDN не оновиться
-  for (const a of appsCache) { const norm = String(a.url).replace(/\/$/, ''); if (!fresh[norm]) fresh[norm] = a; }
-  appsCache = Object.values(fresh).map(a => {
-    const norm = String(a.url).replace(/\/$/, '');
-    const n = (owners[norm] || new Set([a.repoOwner])).size;
-    return { ...a, pop: Math.max(n, a.pop || 1) };
-  });
-  appsCache.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  appPageCats = {};
+  for (const rn in pageCats) appPageCats[rn] = [...pageCats[rn]];
+  appPageOwners = pageOwners;
 }
-async function addApp() {
-  const name = ($('ap-name') || {}).value || '';
-  const url = ($('ap-url') || {}).value || '';
-  const icon = ($('ap-icon') || {}).value || '🧩';
-  const desc = ($('ap-desc') || {}).value || '';
-  const cat = ($('ap-cat') || {}).value || '';
-  if (!name.trim() || !url.trim()) { appsErr = 'Вкажіть назву і посилання'; renderApps(); return; }
-  let u;
-  try { u = new URL(url.trim()); } catch (e) { appsErr = 'Неправильне посилання'; renderApps(); return; }
-  if (u.protocol !== 'https:') { appsErr = 'Дозволені тільки https:// посилання'; renderApps(); return; }
-  appsErr = '';
-  const id = 'app-' + uid();
-  const data = await readMyFile('data/apps.json', { apps: [] });
-  if (!Array.isArray(data.apps)) data.apps = [];
-  data.apps.push({ id, name: name.trim().slice(0, 60), url: u.href, icon: icon.trim().slice(0, 4) || '🧩', desc: desc.trim().slice(0, 300), cat: cat.trim().slice(0, 40), ts: Date.now() });
-  const ok = await writeMyFile('data/apps.json', data);
-  if (ok) { await refreshApps(); toast('🧩 Застосунок додано!'); }
-  else { appsErr = 'Не вдалося зберегти (перевірте токен)'; }
-  renderApps();
+// популярність сторінки = скільки учасників прикріпили її до категорій у «Сторінках»
+function appPop(a) {
+  const s = appPageOwners[a.repo];
+  return s ? s.size : 1;
 }
+function appCatsFor(a) { return appPageCats[a.repo] || []; }
 function appCard(a) {
-  const pop = (a.pop || 1) > 1 ? `<span class="pop-badge">🔥${a.pop}</span>` : '';
+  const pop = appPop(a) > 1 ? `<span class="pop-badge">🔥${appPop(a)}</span>` : '';
+  const cats = appCatsFor(a);
+  const catTag = cats.length ? `<div class="app-tags">${cats.slice(0, 2).map(c => `<span class="app-tag">${esc(c)}</span>`).join('')}${cats.length > 2 ? `<span class="app-tag">+${cats.length - 2}</span>` : ''}</div>` : '';
   return `
     <div class="person app-card" onclick="go('app/' + encodeURIComponent('${a.id}'))">
       <div class="p-avatar g-emoji">${esc(a.icon || '🧩')}</div>
       <div class="p-name">${esc(a.name)}${pop}</div>
       <div class="offline">${esc(a.desc || '')}${a.repoOwner ? '<br>➕ ' + esc(a.repoOwner) : ''}</div>
+      ${catTag}
     </div>`;
 }
-// групування за категоріями; сортування категорій за популярністю (сума 🔥), потім за кількістю
+// групування за категоріями; сторінка може бути в КІЛЬКОХ категоріях (як у «Сторінки»)
 function appCats() {
   const map = {};
   for (const a of appsCache) {
-    const c = (a.cat || '').trim() || 'Без категорії';
-    (map[c] = map[c] || []).push(a);
+    const cats = appCatsFor(a);
+    if (!cats.length) { (map['Без категорії'] = map['Без категорії'] || []).push(a); }
+    else for (const cn of cats) (map[cn] = map[cn] || []).push(a);
   }
   return Object.entries(map)
-    .map(([name, apps]) => ({ name, apps, pop: apps.reduce((s, a) => s + (a.pop || 1), 0) }))
+    .map(([name, apps]) => ({ name, apps, pop: apps.reduce((s, a) => s + appPop(a), 0) }))
     .sort((x, y) => y.pop - x.pop || y.apps.length - x.apps.length);
 }
 function openCat(name) {
@@ -1587,49 +1600,34 @@ function openCat(name) {
 }
 function renderApps() {
   const cats = appCats();
-  const topApps = [...appsCache].sort((a, b) => (b.pop || 1) - (a.pop || 1)).slice(0, 3);
+  const topApps = [...appsCache].sort((a, b) => appPop(b) - appPop(a) || (a.name || '').localeCompare(b.name || '')).slice(0, 3);
   const topCats = [...cats].sort((a, b) => b.pop - a.pop).slice(0, 3);
-  const catNames = cats.map(c => c.name);
   CONTENT().innerHTML = `
     <div class="card">
       <div class="card-title">🧩 Застосунки</div>
-      <div class="set-desc">Сайти спільноти відкриваються всередині Спільноти. Застосунок бачить твій нік — токен не передається ніколи.</div>
-      ${appsCache.some(a => a.repoOwner === me) ? '' : '<button class="btn" style="margin-bottom:10px" onclick="seedCatalog()">⚡ Завантажити стартовий каталог</button>'}
-      <div class="quick-post">
-        ${avatarHtml(me, myProfile.emoji, 'sm')}
-        <input class="input" id="ap-name" placeholder="Назва застосунку..." maxlength="60">
-        <input class="input" id="ap-url" placeholder="https://... (посилання)" maxlength="200">
-      </div>
-      <div class="quick-post">
-        <input class="input" id="ap-cat" list="ap-cats-list" placeholder="Категорія (вибрати або нова)..." maxlength="40">
-        <datalist id="ap-cats-list">${catNames.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
-        <input class="input" id="ap-icon" placeholder="Іконка" maxlength="4" style="max-width:90px">
-        <input class="input" id="ap-desc" placeholder="Опис..." maxlength="300">
-        <button class="btn" onclick="addApp()">➕ Додати</button>
-      </div>
-      <div class="err" id="ap-err">${esc(appsErr)}</div>
+      <div class="set-desc">Застосунок = задеплоєна сторінка учасника. Все збирається автоматично — нічого додавати не треба. Застосунок бачить твій нік — токен не передається ніколи.</div>
     </div>
     ${appsCache.length ? `
     <div class="card">
       <div class="card-title">🔥 Популярне в спільноті</div>
-      <div class="pop-row">${topApps.map(a => `<span class="pop-chip" onclick="go('app/' + encodeURIComponent('${a.id}'))">${esc(a.icon || '🧩')} ${esc(a.name)} <b>${a.pop || 1}</b></span>`).join('')}</div>
+      <div class="pop-row">${topApps.map(a => `<span class="pop-chip" onclick="go('app/' + encodeURIComponent('${a.id}'))">${esc(a.icon || '🧩')} ${esc(a.name)} <b>${appPop(a)}</b></span>`).join('')}</div>
       <div class="pop-row">${topCats.map(c => `<span class="pop-chip pop-cat" onclick="openCat('${esc(c.name.replace(/'/g, "\\'"))}')">📂 ${esc(c.name)} <b>${c.pop}</b></span>`).join('')}</div>
-      <div class="set-desc" style="font-size:11px">🔥 = скільки учасників додали собі</div>
+      <div class="set-desc" style="font-size:11px">🔥 = скільки учасників прикріпили сторінку до категорій у «Сторінках»</div>
     </div>
     <div class="card">
-      <div class="card-title">Каталог за категоріями</div>
+      <div class="card-title">Каталог за категоріями (${appsCache.length})</div>
       ${cats.map((c, i) => `
       <details class="app-cat" data-cat="${esc(c.name)}" ${i === 0 ? 'open' : ''}>
         <summary><span class="ac-name">📂 ${esc(c.name)}</span><span class="ac-count">${c.apps.length} · 🔥${c.pop}</span></summary>
         <div class="people-grid">${c.apps.map(appCard).join('')}</div>
       </details>`).join('')}
-    </div>` : '<div class="card"><div class="empty">Каталог порожній. Додайте перший застосунок!</div></div>'}`;
+    </div>` : '<div class="card"><div class="empty">Сторінок поки немає. Задеплойте сайт на GitHub Pages — і він з\'явиться тут.</div></div>'}`;
 }
 function renderApp(id) {
   const a = appsCache.find(x => x.id === id);
   if (!a) {
     CONTENT().innerHTML = `<div class="card"><div class="card-title">Застосунок</div><div class="empty">Завантаження застосунку...</div></div>`;
-    refreshApps().then(() => renderScreen());
+    refreshApps().then(() => refreshAppCats()).then(() => renderScreen());
     return;
   }
   CONTENT().innerHTML = `
@@ -2561,7 +2559,7 @@ function startPolling() {
           await refreshGroups();
           if (screen === 'group') await refreshGroupWall();
         }
-        if (mod.poll === 'apps' || screen === 'apps' || screen === 'app') await refreshApps();
+        if (mod.poll === 'apps' || screen === 'apps' || screen === 'app') { await refreshApps(); await refreshAppCats(); }
       }
       if (screen === 'settings') await refreshModules();
       const sig = currentSig(screen);
@@ -2762,7 +2760,7 @@ async function finishRegistration() {
 // ================= СТАРТ =================
 async function refreshAll() {
   await searchParticipants(true);
-  await Promise.all([refreshWall(), refreshLikes(), refreshComments(), refreshDialogs(), loadMyProfile(), refreshAvatars(), refreshGroups(), refreshApps(), refreshModules()]);
+  await Promise.all([refreshWall(), refreshLikes(), refreshComments(), refreshDialogs(), loadMyProfile(), refreshAvatars(), refreshGroups(), refreshApps(), refreshAppCats(), refreshModules()]);
 }
 function renderHeader() {
   const hu = $('header-user');
@@ -2803,7 +2801,7 @@ async function init() {
     if (!mod || !moduleEnabled(mod.id)) { go(firstEnabledScreen()); return; }
     if (screen === 'dialog') { refreshDialogs().then(() => renderScreen()); }
     else if (screen === 'group') { refreshGroups().then(() => refreshGroupWall()).then(() => renderScreen()); }
-    else if (screen === 'app') { refreshApps().then(() => renderScreen()); }
+    else if (screen === 'app') { refreshApps().then(() => refreshAppCats()).then(() => renderScreen()); }
     else if (screen === 'settings') { refreshModules().then(() => renderScreen()); }
     else renderScreen();
   });
