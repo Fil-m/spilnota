@@ -6,7 +6,8 @@
 <title>Спільнота</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%2345688E'/><text y='.9em' font-size='80' fill='white' font-family='sans-serif'>С</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/base.css?v=25">
+<link rel="stylesheet" href="css/modules.css?v=25">
 </head>
 <body>
 
@@ -62,6 +63,22 @@
 <!-- Тоаст -->
 <div class="toast hidden" id="toast"></div>
 
-<script src="js/app.js?v=23"></script>
+<!-- Шари застосунку (порядок важливий: config → utils → api → data → модулі → boot) -->
+<script src="js/config.js?v=25"></script>
+<script src="js/utils.js?v=25"></script>
+<script src="js/api.js?v=25"></script>
+<script src="js/data.js?v=25"></script>
+<script src="js/community.js?v=25"></script>
+<script src="js/embed.js?v=25"></script>
+<script src="js/render.js?v=25"></script>
+<script src="js/render-groups.js?v=25"></script>
+<script src="js/render-projects.js?v=25"></script>
+<script src="js/render-pages.js?v=25"></script>
+<script src="js/render-apps.js?v=25"></script>
+<script src="js/render-avatar.js?v=25"></script>
+<script src="js/render-profile.js?v=25"></script>
+<script src="js/render-settings.js?v=25"></script>
+<script src="js/actions.js?v=25"></script>
+<script src="js/app.js?v=25"></script>
 </body>
 </html>
